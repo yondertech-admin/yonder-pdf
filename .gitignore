@@ -1,0 +1,10 @@
+node_modules/
+out/
+dist/
+release/
+src/renderer/public/pdfjs/
+*.log
+.DS_Store
+.env
+.env.*
+e2e-out/
