@@ -16,7 +16,7 @@ Free, open-source PDF viewer and editor for macOS, Windows and Linux. View, anno
 
 ## Install
 
-Download the latest installer from [Releases](https://github.com/yondertech/yonder-pdf/releases):
+Download the latest installer from [Releases](https://github.com/yondertech-admin/yonder-pdf/releases):
 
 | Platform | File |
 |---|---|
@@ -24,7 +24,7 @@ Download the latest installer from [Releases](https://github.com/yondertech/yond
 | Windows | `Yonder PDF Setup x.y.z.exe` |
 | Linux | `Yonder PDF-x.y.z.AppImage` or `.deb` |
 
-macOS builds are not yet notarized: on first launch right-click the app and choose **Open**.
+macOS builds are code-signed with the Yondertech Inc Developer ID but not yet notarized: on first launch, if Gatekeeper objects, open **System Settings → Privacy & Security** and click **Open Anyway**.
 
 ## Develop
 
@@ -35,6 +35,7 @@ npm run typecheck
 npm run build        # out/
 npm run e2e          # drives the built app over CDP (macOS), writes e2e-out/
 npm run dist:mac     # release/*.dmg (also dist:win, dist:linux)
+scripts/release-mac.sh   # signed macOS installers → GitHub Release (maintainers)
 ```
 
 Ad-free contributor build: `YONDER_ADS=off npm run build`.
@@ -57,7 +58,7 @@ scripts/e2e    CDP-based end-to-end scenarios
 
 ## Privacy
 
-Documents never leave your computer. The only network traffic is the ad banner (a sandboxed frame from `ads.yondertech.net`) and the update check against GitHub. Details: [docs/PRIVACY.md](docs/PRIVACY.md), [docs/ADS.md](docs/ADS.md).
+Documents never leave your computer. The only network traffic is the ad banner (a sandboxed frame from `yondertech.net/yonderpdf/ad`) and the update check against GitHub. Details: [docs/PRIVACY.md](docs/PRIVACY.md), [docs/ADS.md](docs/ADS.md).
 
 ## License
 

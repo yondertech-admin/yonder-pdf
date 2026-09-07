@@ -114,7 +114,7 @@ function Privacy({ onClose }: { onClose: () => void }): ReactNode {
           open or save them. Nothing about your documents is ever uploaded.
         </p>
         <p>
-          <strong>Ads keep the app free.</strong> The small banner at the bottom loads a page from <code>ads.yondertech.net</code> in a sandboxed frame. That
+          <strong>Ads keep the app free.</strong> The small banner at the bottom loads a page from <code>yondertech.net/yonderpdf/ad</code> in a sandboxed frame. That
           frame cannot read your documents, your files, or anything else in the app. Loading it does reveal your IP address to that host (and to the ad network
           it embeds), exactly like visiting a web page. When you are offline, a static message is shown instead.
         </p>
@@ -130,7 +130,7 @@ function Privacy({ onClose }: { onClose: () => void }): ReactNode {
           signature in the document. Certificate-based digital signatures are planned for a future release.
         </p>
         <p>
-          Source code: <ExternalLink href="https://github.com/yondertech/yonder-pdf">github.com/yondertech/yonder-pdf</ExternalLink>
+          Source code: <ExternalLink href="https://github.com/yondertech-admin/yonder-pdf">github.com/yondertech-admin/yonder-pdf</ExternalLink>
         </p>
       </div>
     </Modal>
@@ -149,8 +149,8 @@ function About({ onClose }: { onClose: () => void }): ReactNode {
           Built with Electron, pdf.js and pdf-lib. Handwriting fonts: Dancing Script, Great Vibes, Homemade Apple and Caveat (SIL Open Font License).
         </p>
         <p>
-          <ExternalLink href="https://github.com/yondertech/yonder-pdf">Source code</ExternalLink> ·{' '}
-          <ExternalLink href="https://github.com/yondertech/yonder-pdf/issues">Report an issue</ExternalLink>
+          <ExternalLink href="https://github.com/yondertech-admin/yonder-pdf">Source code</ExternalLink> ·{' '}
+          <ExternalLink href="https://github.com/yondertech-admin/yonder-pdf/issues">Report an issue</ExternalLink>
         </p>
       </div>
     </Modal>

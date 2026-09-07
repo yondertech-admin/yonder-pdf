@@ -238,7 +238,7 @@ tools · Esc back to select · Delete removes selection.
   desktop sizes, collapses to 50 px below 900 px window width. Hidden while
   printing, in fullscreen/presentation, and while the Signature dialog is open.
 - Implementation: `<iframe sandbox src={config.url}>` loading a page **served by
-  Yonder's own static host** (e.g. `https://ads.yondertech.net/yonderpdf/banner`).
+  Yonder's own static host** (`https://yondertech.net/yonderpdf/ad`).
   That page decides what ad network / house ad to show, so ad-network changes
   never require an app release. If the iframe fails to load (offline), the slot
   shows a bundled house ad (static PNG + link). Refresh every 60 s while the
@@ -316,7 +316,7 @@ for recipient details and produces a draft. Also reusable for bulk send.
 
 ## 8. Open source & distribution
 
-- Repo: `github.com/yondertech/yonder-pdf` (MIT). `CONTRIBUTING.md`,
+- Repo: `github.com/yondertech-admin/yonder-pdf` (MIT). `CONTRIBUTING.md`,
   `CODE_OF_CONDUCT.md`, issue templates.
 - CI (GitHub Actions): `ci.yml` — typecheck + build on push/PR for
   macos/windows/ubuntu. `release.yml` — on tag `v*`, build all three, upload

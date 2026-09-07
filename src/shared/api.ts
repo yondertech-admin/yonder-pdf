@@ -201,10 +201,11 @@ export const DEFAULT_SETTINGS: Settings = {
 /** Only these https hosts may be opened in the system browser from the app. */
 export const EXTERNAL_URL_ALLOWLIST = [
   'yondertech.net',
-  'ads.yondertech.net',
+  'www.yondertech.net',
   'github.com',
   'www.github.com',
   'fonts.google.com'
 ]
 
-export const AD_HOST = 'https://ads.yondertech.net'
+/** Ad host page lives on the main site under /yonderpdf/ad (no separate DNS needed). */
+export const AD_HOST = 'https://yondertech.net'

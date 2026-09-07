@@ -7,7 +7,7 @@ import { AD_HOST } from '@shared/api'
 
 export const adsConfig = {
   enabled: typeof __YONDER_ADS__ === 'undefined' ? true : __YONDER_ADS__,
-  url: `${AD_HOST}/yonderpdf/banner?v=1`,
+  url: `${AD_HOST}/yonderpdf/ad?v=1`,
   refreshSeconds: 60,
   /** Shown when offline or when the host page has not sent a "ready" ping within `timeoutMs`. */
   timeoutMs: 6000,
@@ -15,6 +15,6 @@ export const adsConfig = {
     headline: 'Yonder PDF is free and open source.',
     body: 'Ads keep it that way. Star the project on GitHub or sponsor a release.',
     cta: 'View on GitHub',
-    url: 'https://github.com/yondertech/yonder-pdf'
+    url: 'https://github.com/yondertech-admin/yonder-pdf'
   }
 }

@@ -2,9 +2,9 @@
 
 **Your documents stay on your computer.** Yonder PDF has no accounts and no document backend. Files are read when you open them and written when you save. Nothing about your documents, your usage, or your machine is uploaded.
 
-**Ads keep the app free.** The banner at the bottom of the window loads a page from `https://ads.yondertech.net` inside a sandboxed frame (`sandbox="allow-scripts allow-popups"`, no same-origin access). That frame cannot read your documents, the file system, or anything else in the app. Loading it reveals your IP address and a generic browser identifier to that host and to whichever ad network it embeds, exactly like visiting a web page. When you are offline a static message is shown instead. The frame is never loaded in fullscreen, while printing, or while the signature dialog is open.
+**Ads keep the app free.** The banner at the bottom of the window loads a page from `https://yondertech.net` (path `/yonderpdf/ad`) inside a sandboxed frame (`sandbox="allow-scripts allow-popups"`, no same-origin access). That frame cannot read your documents, the file system, or anything else in the app. Loading it reveals your IP address and a generic browser identifier to that host and to whichever ad network it embeds, exactly like visiting a web page. When you are offline a static message is shown instead. The frame is never loaded in fullscreen, while printing, or while the signature dialog is open.
 
-**Updates come from GitHub.** The app checks the GitHub Releases page of the open-source project for new versions. On macOS (until builds are notarized) it only tells you; it does not download or install.
+**Updates come from GitHub.** The app checks the GitHub Releases page of the open-source project for new versions. On Windows and Linux (until those builds are code-signed) it only tells you; on macOS, signed updates download in the background and install when you choose *Restart to update*.
 
 **No analytics, no crash reporting.** We collect no usage data.
 

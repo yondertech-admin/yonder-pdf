@@ -9,10 +9,11 @@ import type { UpdateStatus } from '@shared/api'
  * Self-install is enabled per platform only once releases are code-signed
  * (macOS: Developer ID + notarization; Windows: Authenticode with
  * `win.publisherName` set in electron-builder.yml; Linux: signed AppImage
- * manifests). Until then every platform is check-only (design §12 / finding 27).
+ * manifests). macOS releases are built and signed locally with the Yondertech Inc
+ * Developer ID (scripts/release-mac.sh); Windows/Linux stay check-only until signed.
  */
-const SIGNED_RELEASES: Record<string, boolean> = { darwin: false, win32: false, linux: false }
-const RELEASES_URL = 'https://github.com/yondertech/yonder-pdf/releases'
+const SIGNED_RELEASES: Record<string, boolean> = { darwin: true, win32: false, linux: false }
+const RELEASES_URL = 'https://github.com/yondertech-admin/yonder-pdf/releases'
 
 let status: UpdateStatus = { state: 'idle' }
 let wired = false

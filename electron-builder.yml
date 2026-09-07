@@ -30,6 +30,7 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   notarize: false
+  identity: 'Yondertech Inc (C29K99D3D3)'
 dmg:
   contents:
     - { x: 130, y: 220 }
@@ -48,6 +49,6 @@ linux:
   maintainer: Yonder Tech <admin@yondertech.net>
 publish:
   provider: github
-  owner: yondertech
+  owner: yondertech-admin
   repo: yonder-pdf
   releaseType: release

@@ -1,7 +1,7 @@
 # Ad slot — operator notes
 
 The app never talks to an ad network directly. It loads **one** page,
-`https://ads.yondertech.net/yonderpdf/banner?v=1&n=<refresh>`, in a sandboxed
+`https://yondertech.net/yonderpdf/ad?v=1&n=<refresh>`, in a sandboxed
 iframe (`allow-scripts allow-popups`, no `allow-same-origin`). That host page
 decides what to render, so the network, sizes and creatives can change without
 an app release.

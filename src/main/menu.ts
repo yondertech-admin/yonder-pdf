@@ -156,8 +156,8 @@ export function buildMenu(send: Send): Menu {
         cmd('Keyboard Shortcuts', 'help:shortcuts', 'CmdOrCtrl+/'),
         cmd('Privacy & Ads', 'help:privacy'),
         { type: 'separator' },
-        { label: 'Source Code on GitHub', click: () => void shell.openExternal('https://github.com/yondertech/yonder-pdf') },
-        { label: 'Report an Issue', click: () => void shell.openExternal('https://github.com/yondertech/yonder-pdf/issues') },
+        { label: 'Source Code on GitHub', click: () => void shell.openExternal('https://github.com/yondertech-admin/yonder-pdf') },
+        { label: 'Report an Issue', click: () => void shell.openExternal('https://github.com/yondertech-admin/yonder-pdf/issues') },
         ...(isMac ? [] : [{ type: 'separator' } as MenuItemConstructorOptions, cmd('Check for Updates…', 'help:checkUpdates'), cmd('About Yonder PDF', 'help:about')])
       ]
     }

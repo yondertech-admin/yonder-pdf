@@ -33,7 +33,7 @@ app.setAboutPanelOptions({
   applicationName: 'Yonder PDF',
   applicationVersion: app.getVersion(),
   copyright: '© 2026 Yonder Tech · MIT License',
-  website: 'https://github.com/yondertech/yonder-pdf'
+  website: 'https://github.com/yondertech-admin/yonder-pdf'
 })
 
 function pdfArgs(argv: string[]): string[] {
