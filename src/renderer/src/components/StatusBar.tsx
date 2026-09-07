@@ -29,7 +29,11 @@ export function StatusBar(): ReactNode {
       )}
       {update.state === 'downloading' && <span>Downloading update {update.percent}%</span>}
       {update.state === 'ready' && (
-        <button className="btn" style={{ height: 20, fontSize: 11 }} onClick={() => void window.yonder.update.install()}>
+        <button
+          className="btn"
+          style={{ height: 20, fontSize: 11 }}
+          onClick={() => void useStore.getState().closeAll().then((ok) => { if (ok) void window.yonder.update.install() })}
+        >
           Restart to update to {update.version}
         </button>
       )}

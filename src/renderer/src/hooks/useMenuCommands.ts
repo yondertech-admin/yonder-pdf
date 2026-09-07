@@ -5,9 +5,24 @@ import { newId } from '@/pdf/types'
 import { todayString } from '@/pdf/signature'
 import { applySelectionMarkup } from '@/components/PageView'
 
+function isTyping(): boolean {
+  const el = document.activeElement as HTMLElement | null
+  return Boolean(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable))
+}
+
+const ALWAYS = new Set<MenuCommand>(['help:about', 'help:privacy', 'help:shortcuts', 'help:checkUpdates', 'view:theme:system', 'view:theme:light', 'view:theme:dark'])
+
 export function runCommand(cmd: MenuCommand): void {
   const s = useStore.getState()
   const doc = s.docs.find((d) => d.id === s.activeId) ?? null
+  // Native accelerators bypass the renderer's focus checks (finding 25): text inputs keep
+  // their own undo/redo, and nothing runs while a long operation or modal is active.
+  if (isTyping() && (cmd === 'edit:undo' || cmd === 'edit:redo' || cmd === 'edit:selectAll' || cmd === 'edit:deleteSelection')) {
+    document.execCommand(cmd === 'edit:undo' ? 'undo' : cmd === 'edit:redo' ? 'redo' : cmd === 'edit:selectAll' ? 'selectAll' : 'delete')
+    return
+  }
+  if (!ALWAYS.has(cmd) && (s.busy || (s.dialog && s.dialog.type !== 'note'))) return
+  if (cmd.startsWith('file:') || cmd.startsWith('page:')) (document.activeElement as HTMLElement | null)?.blur?.()
   switch (cmd) {
     case 'file:open':
       return void s.openDialog()
@@ -96,14 +111,31 @@ export function runCommand(cmd: MenuCommand): void {
       return void (doc && !doc.readOnly && s.setDialog({ type: 'signature', kind: 'initials' }))
     case 'sign:date': {
       if (!doc || doc.readOnly) return
-      const p = doc.pages[doc.currentPage]
-      const w = 110,
-        h = 18
-      const id = newId()
-      s.addAnnotation({ id, page: doc.currentPage, createdAt: Date.now(), kind: 'text', rect: { x: p.width - w - 36, y: p.height - 36 - h, width: w, height: h }, text: todayString(), fontSize: 11, color: '#1a1a1a' })
-      s.setTool('select')
-      s.select([id])
-      s.showToast('Date added at the top-right of the page. Drag it into position.')
+      // Build the box in display space (top-right corner) and map it back through the page
+      // viewport so CropBox offsets and /Rotate are honoured (finding 28).
+      void doc.pdf.getPage(doc.currentPage + 1).then((page) => {
+        const vp = page.getViewport({ scale: 1 })
+        const w = 110,
+          h = 18,
+          m = 36
+        const [x1, y1] = vp.convertToPdfPoint(vp.width - m - w, m)
+        const [x2, y2] = vp.convertToPdfPoint(vp.width - m, m + h)
+        const id = newId()
+        useStore.getState().addAnnotation({
+          id,
+          page: doc.currentPage,
+          createdAt: Date.now(),
+          kind: 'text',
+          rect: { x: Math.min(x1, x2), y: Math.min(y1, y2), width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) },
+          text: todayString(),
+          fontSize: 11,
+          color: '#1a1a1a',
+          rotate: page.rotate
+        })
+        useStore.getState().setTool('select')
+        useStore.getState().select([id])
+        useStore.getState().showToast('Date added at the top-right of the page. Drag it into position.')
+      })
       return
     }
     case 'page:rotateCw':

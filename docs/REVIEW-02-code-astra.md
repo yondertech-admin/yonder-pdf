@@ -1,0 +1,61 @@
+1. **Blocker — [pdfjs.ts:78](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/pdf/pdfjs.ts:78):** pdf.js 6 returns `getFieldObjects()` as a `Map`. `Object.keys/values` therefore detect neither forms nor signatures, allowing signed PDFs to be overwritten without warning. **Fix:** use `fields.size` and `fields.values()`; require an explicitly confirmed unsigned copy.
+
+2. **Major — [index.ts:103](/Users/aeedpuganti/Code/yonderPDF/src/main/index.ts:103):** Ad popups can launch **any HTTPS destination** through `shell.openExternal`, without confirmation. `referrer.url.startsWith(AD_HOST)` also accepts lookalike hosts and treats referrer metadata as frame identity. **Fix:** enforce the destination allowlist for every popup, compare parsed origins exactly, and require a user-approved launch. [Electron documents referrer as outgoing metadata.](https://www.electronjs.org/docs/latest/api/web-contents#contentssetwindowopenhandlerhandler)
+
+3. **Major — [updater.ts:15](/Users/aeedpuganti/Code/yonderPDF/src/main/updater.ts:15):** Every packaged Windows build and Linux AppImage can automatically download/install updates, regardless of signing. This contradicts §12’s signed-build restriction. **Fix:** gate installation on verified release-signing configuration for each platform; otherwise remain check-only.
+
+4. **Major — [updater.ts:68](/Users/aeedpuganti/Code/yonderPDF/src/main/updater.ts:68):** Restart-to-update invokes `quitAndInstall()` before resolving dirty documents. On Windows/Linux, electron-updater starts installation before requesting quit; the window-close guard comes too late. **Fix:** complete the save/close transaction before invoking installation, including cancellation handling.
+
+5. **Major — [documents.ts:51](/Users/aeedpuganti/Code/yonderPDF/src/main/documents.ts:51):** Atomic saves replace existing file permissions with the temporary file’s default permissions. Under umask `022`, saving a private `0600` PDF makes it `0644`. **Fix:** create temporary files exclusively with restrictive permissions and preserve the destination’s applicable permissions before replacement.
+
+6. **Major — [app.ts:189](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/store/app.ts:189):** Failed `saveDocument()` silently falls back to `baseBytes`. Save then succeeds and marks the document clean despite losing form edits. **Fix:** propagate form serialization failures and abort saves, page operations, and exports.
+
+7. **Major — [app.ts:410](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/store/app.ts:410):** Operations are not serialized. A save completing after a page operation replaces the newer `baseBytes` with old bytes while retaining the newer PDF proxy. Form edits also escape the reference-only dirty check. **Fix:** serialize operations per document, track all edit revisions, and conditionally commit the captured revision. Recheck dirty state before closing.
+
+8. **Major — [app.ts:619](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/store/app.ts:619):** Undo/redo snapshots retain historical bytes without preserving current form state. After filling a form, saving, then undoing an annotation, the byte mismatch reloads pre-fill bytes and loses field values. **Fix:** preserve current form values across history restoration using stable field identities, independently of annotation undo.
+
+9. **Major — [Overlay.tsx:459](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/components/Overlay.tsx:459):** Text edits remain component-local until blur; native Save/Print/Close commands read the previous annotation text. Sticky-note dialogs have the same problem. **Fix:** flush pending editors before document operations, or keep their draft values in document state.
+
+10. **Major — [pageOps.ts:54](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/pdf/pageOps.ts:54):** Reordering reparents pages without materializing inherited `Resources`, `MediaBox`, `CropBox`, and `Rotate`. Nested page trees can lose these properties; an in-memory reproduction lost `MediaBox` entirely. **Fix:** resolve and copy inherited attributes onto each page before removing/reparenting it.
+
+11. **Major — [pageOps.ts:40](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/pdf/pageOps.ts:40):** Deletion removes page-tree entries but leaves their AcroForm fields/widgets and navigation references. Deleted fields survive in the document and can break later flattening. **Fix:** remove deleted widgets, prune empty fields, and repair destinations/outlines referencing deleted pages.
+
+12. **Major — [global.css:525](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/styles/global.css:525):** Select mode places the full-page, pointer-active text layer above forms, links, annotations, and resize handles. It intercepts their mouse interactions. **Fix:** correct the stacking order and make the text-layer background pointer-transparent while retaining interactive text spans.
+
+13. **Major — [Overlay.tsx:227](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/components/Overlay.tsx:227):** Text, image, and note dragging captures the pointer on an HTML element, but move/up handlers exist only on its sibling SVG. Their gestures never update or finish normally. **Fix:** handle captured events on a shared ancestor or capture on the SVG that owns those handlers.
+
+14. **Major — [PageView.tsx:49](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/components/PageView.tsx:49):** Virtualization stops rendering but retains every visited canvas backing store and text/form DOM. Scrolling through a large PDF accumulates gigabytes despite §12’s bounded-memory promise. **Fix:** release offscreen canvases/layers, remove viewport registrations on unmount, and clean unused page resources.
+
+15. **Major — [print.ts:73](/Users/aeedpuganti/Code/yonderPDF/src/main/print.ts:73):** `p.file.split('/').pop()` returns the complete backslash-separated path on Windows. Prefixing it with `./` produces an invalid image URL, yielding blank print pages; decode failures are swallowed. **Fix:** use `basename()` or `pathToFileURL()` and abort on decode failure.
+
+16. **Major — [print.ts:91](/Users/aeedpuganti/Code/yonderPDF/src/main/print.ts:91):** Main loads and decodes every print-page image simultaneously. Streaming PNGs from the renderer therefore does not bound decoded memory to one page. **Fix:** use a bounded print/spooling strategy or explicitly limit/batch jobs rather than decoding the entire document upfront.
+
+17. **Major — [print.ts:55](/Users/aeedpuganti/Code/yonderPDF/src/main/print.ts:55):** Jobs leave the registry before HTML creation and window construction, outside the cleanup `try/finally`. Those failures leak document images; renderer crashes also leave jobs until application exit. **Fix:** retain jobs through final cleanup, cover the entire lifecycle with `finally`, and clean jobs when their owner dies.
+
+18. **Major — [render.ts:22](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/pdf/render.ts:22):** Materialized print/export PDFs bypass the loader’s CMap, standard-font, WASM, and ICC configuration. Documents requiring those resources can display correctly but print/export incorrectly. **Fix:** share the configured pdf.js loading adapter and destroy loading tasks on failure.
+
+19. **Major — [PageView.tsx:91](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/components/PageView.tsx:91):** `AnnotationLayer.render()` receives no `fieldObjects`. pdf.js consequently synchronizes linked widgets only through mounted DOM elements; widgets on unvisited pages can retain stale values, and reset-form actions are unsupported. **Fix:** retain and pass the complete field-object `Map`.
+
+20. **Major — [writer.ts:56](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/pdf/writer.ts:56):** “Flatten Annotations & Forms” flattens only session annotations. Existing `/Annots` remain editable; an in-memory save/reopen check confirmed this. Form-flatten failures are also silently ignored. **Fix:** flatten existing supported appearances, remove their annotation objects, and report unsupported cases instead of claiming success.
+
+21. **Major — [writer.ts:240](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/pdf/writer.ts:240):** FreeText silently replaces unsupported Unicode with `?`, although the editor displays the original text. Saved and printed names/comments can therefore change. **Fix:** embed suitable Unicode fonts and use matching layout/encoding for preview and appearance generation.
+
+22. **Major — [PageView.tsx:170](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/components/PageView.tsx:170):** Quad normalization discards text orientation; the writer additionally reduces quads to horizontal rectangles/lines. Rotated text can receive underlines along the wrong edge and incorrect strikeouts. **Fix:** preserve oriented corners derived from text geometry and draw appearances from those corners.
+
+23. **Major — [writer.ts:92](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/pdf/writer.ts:92):** Text/signature orientation is recomputed from the page’s *current* `/Rotate`. Rotating a page after placement therefore counter-rotates these annotations and swaps their layout dimensions instead of rotating them with the page. **Fix:** store placement orientation and compose it consistently with page and view rotation in both writer and overlay.
+
+24. **Major — [PageView.tsx:127](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/components/PageView.tsx:127):** Layer CSS and overlay font/stroke sizes use `doc.zoom`, while viewport coordinates also include `/UserUnit`. Non-unit PDFs therefore have mismatched text, widgets, strokes, and saved appearances. **Fix:** expose `page.userUnit` and consistently use the effective viewport scale for visual dimensions.
+
+25. **Major — [useMenuCommands.ts:8](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/hooks/useMenuCommands.ts:8):** Native menu commands bypass the renderer’s typing, modal, and busy checks. Undo can remove annotations while editing a form; accelerators can start conflicting document operations during saves/dialogs. **Fix:** centralize command eligibility and route text-input undo/redo to the focused editor.
+
+26. **Major — [global.css:213](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/styles/global.css:213):** The toolbar’s `overflow: hidden` clips the absolutely positioned Sign dropdown below its fixed height. **Fix:** render the dropdown in a portal or outside the clipping container.
+
+27. **Major — [cdp.mjs:85](/Users/aeedpuganti/Code/yonderPDF/scripts/e2e/cdp.mjs:85):** Running E2E tests forcibly kills every process matching the generic Electron executable path, including unrelated apps with unsaved work. **Fix:** isolate test profiles/instances and terminate only processes spawned by the test runner.
+
+28. **Minor — [useMenuCommands.ts:103](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/hooks/useMenuCommands.ts:103):** Date placement treats displayed page dimensions as raw PDF coordinates, ignoring CropBox offsets, rotation, and `/UserUnit`; dates can land off-page. **Fix:** construct the placement in viewport space and inverse-transform it.
+
+29. **Minor — [app.ts:794](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/store/app.ts:794):** Search cancellation is never activated, and completion checks omit case sensitivity, PDF revision, and whether Find remains open. Old searches can replace newer results; switching tabs does not rerun the query. **Fix:** use a cancellable search generation keyed by document/proxy/options and rerun on document changes.
+
+30. **Minor — [pdfjs.ts:75](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/pdf/pdfjs.ts:75):** XFA, JavaScript calculations, and submit actions are neither detected nor shown as unsupported, contrary to §12. Users can trust stale calculated values or incomplete forms. **Fix:** detect these capabilities and display the promised limitations banner.
+
+31. **Minor — [types.ts:164](/Users/aeedpuganti/Code/yonderPDF/src/renderer/src/pdf/types.ts:164):** Arrow appearance bounds include only endpoints plus limited padding, excluding larger arrowheads. Saved/printed heads get clipped by the Form `/BBox`. **Fix:** include both arrowhead vertices and stroke expansion when calculating bounds.

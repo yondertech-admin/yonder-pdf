@@ -58,7 +58,13 @@ export interface LineAnnotation extends Base {
   opacity: number
 }
 
-export interface TextAnnotation extends Base {
+/** Orientation captured at placement: the page's /Rotate at that moment. The
+ *  content is upright for that rotation and turns with the page afterwards. */
+interface Oriented {
+  rotate: number
+}
+
+export interface TextAnnotation extends Base, Oriented {
   kind: 'text'
   rect: Rect
   text: string
@@ -66,14 +72,14 @@ export interface TextAnnotation extends Base {
   color: string
 }
 
-export interface NoteAnnotation extends Base {
+export interface NoteAnnotation extends Base, Oriented {
   kind: 'note'
   at: Point // top-left corner of the icon
   text: string
   color: string
 }
 
-export interface ImageAnnotation extends Base {
+export interface ImageAnnotation extends Base, Oriented {
   kind: 'image'
   rect: Rect
   /** PNG data URL. */
@@ -159,19 +165,41 @@ export function boundsOf(a: Annotation): Rect {
       return { ...a.rect }
     case 'line':
     case 'arrow': {
-      const x1 = Math.min(a.from.x, a.to.x)
-      const y1 = Math.min(a.from.y, a.to.y)
+      const pts = [a.from, a.to]
+      if (a.kind === 'arrow') pts.push(...arrowHeadPoints(a.from, a.to, a.width))
+      const x1 = Math.min(...pts.map((p) => p.x))
+      const y1 = Math.min(...pts.map((p) => p.y))
+      const x2 = Math.max(...pts.map((p) => p.x))
+      const y2 = Math.max(...pts.map((p) => p.y))
       const pad = Math.max(a.width, 4)
-      return {
-        x: x1 - pad,
-        y: y1 - pad,
-        width: Math.abs(a.to.x - a.from.x) + pad * 2,
-        height: Math.abs(a.to.y - a.from.y) + pad * 2
-      }
+      return { x: x1 - pad, y: y1 - pad, width: x2 - x1 + pad * 2, height: y2 - y1 + pad * 2 }
     }
     case 'note':
       return { x: a.at.x, y: a.at.y - NOTE_ICON_SIZE, width: NOTE_ICON_SIZE, height: NOTE_ICON_SIZE }
   }
+}
+
+/** Arrow head vertices for a line ending at `to` (shared by writer and overlay). */
+export function arrowHeadPoints(from: Point, to: Point, width: number): Point[] {
+  const len = Math.max(10, width * 4)
+  const ang = Math.atan2(to.y - from.y, to.x - from.x)
+  const spread = Math.PI / 7
+  return [
+    { x: to.x - len * Math.cos(ang - spread), y: to.y - len * Math.sin(ang - spread) },
+    { x: to.x - len * Math.cos(ang + spread), y: to.y - len * Math.sin(ang + spread) }
+  ]
+}
+
+/** Characters outside WinAnsi are written as '?' in FreeText appearances (Helvetica). */
+export function hasUnsupportedText(list: Annotation[]): boolean {
+  for (const a of list) {
+    if (a.kind !== 'text') continue
+    for (const ch of a.text) {
+      const c = ch.codePointAt(0) ?? 0
+      if (!(ch === '\n' || ch === '\t' || (c >= 32 && c <= 126) || (c >= 160 && c <= 255) || '€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ'.includes(ch))) return true
+    }
+  }
+  return false
 }
 
 export function translate<T extends Annotation>(a: T, dx: number, dy: number): T {

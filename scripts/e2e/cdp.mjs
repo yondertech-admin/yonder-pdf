@@ -82,7 +82,8 @@ class CDP {
 
 export async function launch(pdf, env = {}) {
   try {
-    execSync('pkill -9 -f "Electron.app/Contents/MacOS/Electron" || true')
+    // Only instances launched from this repository's node_modules.
+    execSync(`pkill -9 -f ${JSON.stringify(resolve(root, 'node_modules/electron/dist'))} || true`)
     await sleep(600)
   } catch {
     /* not macOS or nothing running */

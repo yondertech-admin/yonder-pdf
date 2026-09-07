@@ -48,10 +48,18 @@ export async function readPdf(path: string): Promise<OpenedFile> {
 export async function writeAtomic(path: string, bytes: Uint8Array): Promise<void> {
   const dir = dirname(path)
   const tmp = join(dir, `.${basename(path)}.${process.pid}.${Date.now()}.tmp`)
-  const fh = await fs.open(tmp, 'w')
+  // Keep the target's permissions (a private 0600 file must stay private); new files get 0600 then umask-style 0644.
+  let mode = 0o644
+  try {
+    mode = (await fs.stat(path)).mode & 0o777
+  } catch {
+    /* new file */
+  }
+  const fh = await fs.open(tmp, 'wx', 0o600)
   try {
     await fh.writeFile(bytes)
     await fh.sync()
+    if (process.platform !== 'win32') await fh.chmod(mode)
   } finally {
     await fh.close()
   }

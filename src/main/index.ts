@@ -101,9 +101,15 @@ function createWindow(): void {
   // windows. Links from our own UI go to an allow-list; clicks originating in
   // the ad frame may open any https URL in the system browser.
   win.webContents.setWindowOpenHandler(({ url, referrer }) => {
-    const fromAd = typeof referrer?.url === 'string' && referrer.url.startsWith(AD_HOST)
+    let fromAd = false
+    try {
+      fromAd = typeof referrer?.url === 'string' && new URL(referrer.url).origin === new URL(AD_HOST).origin
+    } catch {
+      fromAd = false
+    }
     let ok = false
     try {
+      // Ad clicks may go to any https advertiser; app links stay on the allow-list.
       ok = fromAd ? new URL(url).protocol === 'https:' : isAllowedExternal(url)
     } catch {
       ok = false

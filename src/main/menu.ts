@@ -46,7 +46,7 @@ export function buildMenu(send: Send): Menu {
         { type: 'separator' },
         cmd('Merge PDFs…', 'file:merge'),
         cmd('Export Pages as Images…', 'file:exportImages'),
-        cmd('Flatten Annotations & Forms…', 'file:flatten'),
+        cmd('Export Flattened Copy (forms + new annotations)…', 'file:flatten'),
         { type: 'separator' },
         cmd('Print…', 'file:print', 'CmdOrCtrl+P'),
         ...(isMac ? [] : [{ type: 'separator' } as MenuItemConstructorOptions, { role: 'quit' } as MenuItemConstructorOptions])

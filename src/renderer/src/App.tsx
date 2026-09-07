@@ -146,10 +146,7 @@ export function App(): ReactNode {
   useEffect(() => {
     if (!doc) return
     const storage = doc.pdf.annotationStorage as unknown as { onSetModified: (() => void) | null }
-    storage.onSetModified = () => {
-      useStore.setState((st) => ({ docs: st.docs.map((d) => (d.id === doc.id && !d.dirty ? { ...d, dirty: true } : d)) }))
-      window.yonder.window.setTitle(doc.name, true)
-    }
+    storage.onSetModified = () => useStore.getState().markFormEdited(doc.id)
     return () => {
       storage.onSetModified = null
     }

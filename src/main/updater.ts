@@ -5,8 +5,13 @@ import { app, BrowserWindow } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import type { UpdateStatus } from '@shared/api'
 
-/** Flip to true once macOS releases are signed + notarized in CI. */
-const MAC_SIGNED = false
+/**
+ * Self-install is enabled per platform only once releases are code-signed
+ * (macOS: Developer ID + notarization; Windows: Authenticode with
+ * `win.publisherName` set in electron-builder.yml; Linux: signed AppImage
+ * manifests). Until then every platform is check-only (design §12 / finding 27).
+ */
+const SIGNED_RELEASES: Record<string, boolean> = { darwin: false, win32: false, linux: false }
 const RELEASES_URL = 'https://github.com/yondertech/yonder-pdf/releases'
 
 let status: UpdateStatus = { state: 'idle' }
@@ -14,7 +19,7 @@ let wired = false
 
 function canInstall(): boolean {
   if (!app.isPackaged) return false
-  if (process.platform === 'darwin') return MAC_SIGNED
+  if (!SIGNED_RELEASES[process.platform]) return false
   if (process.platform === 'linux') return Boolean(process.env.APPIMAGE)
   return true
 }

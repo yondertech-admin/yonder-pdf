@@ -178,7 +178,9 @@ a {
   padding: 0 8px;
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
-  overflow: hidden;
+  overflow: visible;
+  position: relative;
+  z-index: 25;
 }
 .toolbar .group {
   display: flex;
@@ -522,17 +524,11 @@ a {
   z-index: 3;
   pointer-events: none;
 }
-.page.tool-select .textLayer {
-  z-index: 4;
-}
 .page.tool-select .overlay {
   pointer-events: none;
 }
 .page.tool-select .overlay .hit {
   pointer-events: auto;
-}
-.page.tool-markup .textLayer {
-  z-index: 4;
 }
 .page.tool-markup .overlay {
   pointer-events: none;

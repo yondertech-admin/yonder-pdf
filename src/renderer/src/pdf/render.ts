@@ -1,7 +1,7 @@
 // Rasterization for print and image export. Renders from a *materialized*
 // copy (annotations + forms flattened) so output always equals what Save
 // would produce (design §12 / finding 18).
-import { pdfjs, type PDFDocumentProxy } from './pdfjs'
+import { documentOptions, pdfjs, type PDFDocumentProxy } from './pdfjs'
 import { writeAnnotations } from './writer'
 import type { Annotation } from './types'
 
@@ -19,8 +19,13 @@ export interface Materialized {
 
 export async function materialize(bytes: Uint8Array, annotations: Annotation[], author?: string): Promise<Materialized> {
   const flat = await writeAnnotations(bytes, annotations, { flattenAnnotations: true, flattenForms: true, author })
-  const task = pdfjs.getDocument({ data: flat })
-  return { pdf: await task.promise, destroy: () => task.destroy() }
+  const task = pdfjs.getDocument({ data: flat, ...documentOptions() })
+  try {
+    return { pdf: await task.promise, destroy: () => task.destroy() }
+  } catch (err) {
+    void task.destroy()
+    throw err
+  }
 }
 
 export async function renderPage(

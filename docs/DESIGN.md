@@ -387,3 +387,31 @@ Full findings: `docs/REVIEW-01-design-astra.md`. Decisions:
 | 23–26 | Ad frame: `sandbox="allow-scripts allow-popups"` (no escape, no same-origin). Main denies all child windows via `setWindowOpenHandler` and forwards allow-listed https URLs to the system browser — that is the click bridge. Requests stop when the slot is hidden. Launch with house/direct ads; network approval is an operator task, documented in `docs/ADS.md`. Privacy copy says "no document backend" and discloses the ad request. |
 | 27 | Auto-install updates only for signed builds; unsigned builds are check-only. Dirty documents block installation until saved. |
 | 28 | Acceptance criteria add: clickable links, keyboard form navigation, and "rectangle is not redaction" labelling. |
+
+## 13. Code review outcomes (Codex / GPT-6 Astra, 2026-09-07)
+
+Full findings: `docs/REVIEW-02-code-astra.md` (31 items). Fixed in the same day:
+`getFieldObjects` Map handling (#1, blocker), exact-origin check for ad-frame
+popups (#2), check-only updater on every platform until releases are signed
+(#3), save/close before install (#4), permission-preserving atomic writes (#5),
+form serialization failures now abort the operation (#6), per-document
+operation lock + edit revision counter (#7), history rebased onto saved bytes
+(#8), inline editors flushed before file operations (#9), inherited page
+attributes materialised before reordering (#10), orphaned AcroForm widgets
+pruned after page deletion (#11), layer stacking so forms/links/handles are
+clickable in Select mode (#12), pointer-capture handling for HTML annotations
+(#13), off-screen canvases and layers released (#14), Windows-safe print image
+URLs and decode checks (#15), print job lifecycle and renderer-crash cleanup
+(#17), shared pdf.js options for print/export copies (#18), `fieldObjects`
+passed to every annotation layer (#19), placement orientation stored on
+text/image/note annotations (#23), menu commands respect focus/busy/modal state
+(#25), Sign dropdown no longer clipped (#26), e2e kills only its own Electron
+(#27), date stamp placed through the page viewport (#28), cancellable search
+generations (#29), XFA/JavaScript banners (#30), arrow-head bounds (#31).
+
+Deferred, documented as limitations: flattening annotations that already
+existed in the file (#20, Phase 3 with annotation import), Unicode fonts for
+FreeText (#21 — non-WinAnsi characters become "?" and the user is told on save),
+oriented quads for rotated text markup (#22), `/UserUnit` scaling (#24),
+bounded decode memory in the print window (#16 — pages are written to disk one
+at a time; Chromium decodes them all when the print dialog opens).

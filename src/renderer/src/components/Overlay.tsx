@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { MessageSquare } from 'lucide-react'
 import type { PageViewport } from '@/pdf/pdfjs'
 import { useStore, type Doc } from '@/store/app'
-import { arrowHeadPoints } from '@/pdf/writer'
+import { arrowHeadPoints } from '@/pdf/types'
 import { defaultPlacement } from '@/pdf/signature'
 import {
   NOTE_ICON_SIZE,
@@ -79,7 +79,10 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
     const r = root.current!.getBoundingClientRect()
     return { x: e.clientX - r.left, y: e.clientY - r.top }
   }
-  const contentDims = (b: VRect): { cw: number; ch: number } => (doc.rotation % 180 ? { cw: b.h, ch: b.w } : { cw: b.w, ch: b.h })
+  const pageRotate = doc.pages[index]?.rotate ?? 0
+  /** On-screen rotation of content placed for orientation `placed` (page /Rotate at placement time). */
+  const screenRot = (placed: number): number => ((pageRotate - placed + doc.rotation) % 360 + 360) % 360
+  const contentDims = (b: VRect, placed: number): { cw: number; ch: number } => (screenRot(placed) % 180 ? { cw: b.h, ch: b.w } : { cw: b.w, ch: b.h })
 
   // Auto-open editor for freshly created text annotations.
   useEffect(() => {
@@ -102,7 +105,7 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
       const box: VRect = { x: p.x, y: p.y, w: NOTE_ICON_SIZE * z, h: NOTE_ICON_SIZE * z }
       const r = vToRect(box)
       const id = newId()
-      actions.add({ id, page: index, createdAt: Date.now(), kind: 'note', at: { x: r.x, y: r.y + r.height }, text: '', color: style.color })
+      actions.add({ id, page: index, createdAt: Date.now(), kind: 'note', at: { x: r.x, y: r.y + r.height }, text: '', color: style.color, rotate: pageRotate })
       actions.setTool('select')
       actions.setDialog({ type: 'note', id })
     } else if (tool === 'image' && pendingImage) {
@@ -111,7 +114,7 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
       const sh = (doc.rotation % 180 ? width : height) * z
       const r = vToRect({ x: p.x - sw / 2, y: p.y - sh / 2, w: sw, h: sh })
       const id = newId()
-      actions.add({ id, page: index, createdAt: Date.now(), kind: 'image', rect: r, dataUrl: pendingImage.dataUrl, role: pendingImage.role })
+      actions.add({ id, page: index, createdAt: Date.now(), kind: 'image', rect: r, dataUrl: pendingImage.dataUrl, role: pendingImage.role, rotate: pageRotate })
       actions.setPendingImage(null)
       actions.select([id])
     }
@@ -202,7 +205,7 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
         const h = (style.fontSize * 1.2 + 6) * z
         const w = 180 * z
         const box: VRect = dist > 10 ? { x: Math.min(g.start.x, p.x), y: Math.min(g.start.y, p.y), w: Math.abs(p.x - g.start.x), h: Math.abs(p.y - g.start.y) } : { x: g.start.x, y: g.start.y, w, h }
-        const a: TextAnnotation = { ...base, kind: 'text', rect: vToRect(box), text: '', fontSize: style.fontSize, color: style.color }
+        const a: TextAnnotation = { ...base, kind: 'text', rect: vToRect(box), text: '', fontSize: style.fontSize, color: style.color, rotate: pageRotate }
         actions.add(a)
         setEditing(a.id)
       } else if (dist > 3) {
@@ -313,13 +316,13 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
   const renderHtml = (a: Annotation): ReactNode => {
     if (a.kind !== 'text' && a.kind !== 'image' && a.kind !== 'note') return null
     const b = rectToV(boundsOf(a))
-    const { cw, ch } = contentDims(b)
+    const { cw, ch } = contentDims(b, a.rotate ?? pageRotate)
     const common: React.CSSProperties = {
       left: b.x + b.w / 2,
       top: b.y + b.h / 2,
       width: cw,
       height: ch,
-      transform: `translate(-50%, -50%) rotate(${doc.rotation}deg)`,
+      transform: `translate(-50%, -50%) rotate(${screenRot(a.rotate ?? pageRotate)}deg)`,
       pointerEvents: selectable ? 'auto' : 'none'
     }
     if (a.kind === 'text') {
@@ -430,9 +433,10 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
         {renderPreview()}
         {selectable && annots.filter((a) => doc.selectedIds.includes(a.id)).map(renderSelection)}
       </svg>
-      <div className="overlay-html">
+      {/* Pointer capture on an HTML annotation retargets events to that element; handling them here (its ancestor) completes the gesture. */}
+      <div className="overlay-html" onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}>
         {annots.map(renderHtml)}
-        {editingAnnot && <TextEditor a={editingAnnot} box={rectToV(editingAnnot.rect)} dims={contentDims(rectToV(editingAnnot.rect))} rotation={doc.rotation} zoom={z} onDone={(text) => { if (text.trim()) actions.update(editingAnnot.id, { text }); else actions.remove([editingAnnot.id]); setEditing(null) }} />}
+        {editingAnnot && <TextEditor a={editingAnnot} box={rectToV(editingAnnot.rect)} dims={contentDims(rectToV(editingAnnot.rect), editingAnnot.rotate ?? pageRotate)} rotation={screenRot(editingAnnot.rotate ?? pageRotate)} zoom={z} onDone={(text) => { if (text.trim()) actions.update(editingAnnot.id, { text }); else actions.remove([editingAnnot.id]); setEditing(null) }} />}
         {tool === 'image' && pendingImage && hover && (() => {
           const { width, height } = defaultPlacement(pendingImage, pendingImage.role)
           const sw = (doc.rotation % 180 ? height : width) * z

@@ -3,8 +3,50 @@
 // extract / insert-from-file copy pages (form fields of the *source* are not
 // carried over — the UI says so). Each op also returns how to remap in-app
 // annotation page indices.
-import { PDFDocument, degrees } from 'pdf-lib'
+import { PDFDocument, PDFName, PDFRef, degrees } from 'pdf-lib'
 import type { Annotation } from './types'
+
+const INHERITABLE = ['Resources', 'MediaBox', 'CropBox', 'Rotate'].map((n) => PDFName.of(n))
+
+/** Copy inherited page-tree attributes onto each leaf so re-parenting keeps them. */
+function materializeInherited(doc: PDFDocument): void {
+  for (const page of doc.getPages()) {
+    for (const key of INHERITABLE) {
+      if (page.node.get(key) === undefined) {
+        const v = page.node.getInheritableAttribute(key)
+        if (v !== undefined) page.node.set(key, v)
+      }
+    }
+  }
+}
+
+/** Drop AcroForm widgets (and empty fields) that pointed at pages no longer in the document. */
+function pruneOrphanWidgets(doc: PDFDocument): void {
+  let form
+  try {
+    form = doc.getForm()
+  } catch {
+    return
+  }
+  const live = new Set(doc.getPages().map((p) => p.ref.toString()))
+  for (const field of form.getFields()) {
+    const widgets = field.acroField.getWidgets()
+    const keep = widgets.filter((w) => {
+      const p = w.P()
+      return !(p instanceof PDFRef) || live.has(p.toString())
+    })
+    if (keep.length === widgets.length) continue
+    if (keep.length === 0) {
+      try {
+        form.removeField(field)
+      } catch {
+        /* already detached */
+      }
+      continue
+    }
+    field.acroField.dict.set(PDFName.of('Kids'), doc.context.obj(keep.map((w) => w.dict).map((d) => doc.context.getObjectRef(d) ?? d)))
+  }
+}
 
 export type PageMap = (oldIndex: number) => number | null
 
@@ -38,6 +80,7 @@ export async function deletePages(bytes: Uint8Array, indices: number[]): Promise
   // Remove from the end so earlier indices stay valid.
   const sorted = [...set].sort((a, b) => b - a)
   for (const i of sorted) doc.removePage(i)
+  pruneOrphanWidgets(doc)
   const total = doc.getPageCount() + sorted.length
   const newIndex: Array<number | null> = []
   let n = 0
@@ -48,6 +91,7 @@ export async function deletePages(bytes: Uint8Array, indices: number[]): Promise
 /** `order` lists old indices in their new positions. */
 export async function reorderPages(bytes: Uint8Array, order: number[]): Promise<OpResult> {
   const doc = await load(bytes)
+  materializeInherited(doc)
   const pages = doc.getPages()
   if (order.length !== pages.length) throw new Error('Invalid page order')
   const refs = order.map((i) => pages[i])

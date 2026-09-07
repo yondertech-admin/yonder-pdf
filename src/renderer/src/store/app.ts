@@ -5,7 +5,7 @@ import { writeAnnotations } from '@/pdf/writer'
 import * as ops from '@/pdf/pageOps'
 import { searchDocument, type SearchMatch } from '@/pdf/search'
 import { chooseDpi, materialize, renderPage, type Materialized } from '@/pdf/render'
-import { cloneAnnotations, newId, type Annotation, type Tool, type ToolStyle } from '@/pdf/types'
+import { cloneAnnotations, hasUnsupportedText, newId, type Annotation, type Tool, type ToolStyle } from '@/pdf/types'
 
 export type ZoomMode = 'fit-width' | 'fit-page' | 'custom'
 export type Rotation = 0 | 90 | 180 | 270
@@ -31,6 +31,11 @@ export interface Doc {
   readOnly: boolean
   hasSignatureFields: boolean
   hasForms: boolean
+  hasXfa: boolean
+  hasJs: boolean
+  fieldObjects: Map<string, object[]> | null
+  /** Edit revision: bumped on every annotation/form/page change; save compares it. */
+  rev: number
   outline: OutlineNode[] | null
   zoom: number
   zoomMode: ZoomMode
@@ -145,6 +150,8 @@ interface Actions {
   setFullscreen(v: boolean): void
   setUpdateStatus(s: UpdateStatus): void
   refreshRecent(): Promise<void>
+  /** Called when pdf.js reports an AcroForm value change. */
+  markFormEdited(id: string): void
 }
 
 export type Store = State & Actions
@@ -167,6 +174,7 @@ export const TOOL_DEFAULT_COLORS: Partial<Record<Tool, string>> = {
 }
 
 const api = (): Window['yonder'] => window.yonder
+let searchSignal = { cancelled: false }
 
 export const useStore = create<Store>()((set, get) => {
   const active = (): Doc | null => {
@@ -185,15 +193,29 @@ export const useStore = create<Store>()((set, get) => {
     future: []
   })
 
-  /** Bytes with current AcroForm values folded in (pdf.js appearance generation). */
-  const formBytes = async (d: Doc): Promise<Uint8Array> => {
+  /** Per-document mutex: save, page ops, undo/redo and exports never interleave (finding 7). */
+  const locks = new Map<string, Promise<unknown>>()
+  const withLock = async <T,>(id: string, fn: () => Promise<T>): Promise<T> => {
+    const prev = locks.get(id) ?? Promise.resolve()
+    const run = prev.then(fn, fn)
+    locks.set(id, run.catch(() => undefined))
     try {
-      if (d.pdf.annotationStorage.size > 0) return await d.pdf.saveDocument()
-    } catch (err) {
-      console.warn('saveDocument failed, using base bytes', err)
+      return await run
+    } finally {
+      if (locks.get(id) === run) locks.delete(id)
     }
-    return d.baseBytes
   }
+
+  /** Bytes with current AcroForm values folded in (pdf.js appearance generation). Throws rather than silently dropping form edits (finding 6). */
+  const formBytes = async (d: Doc): Promise<Uint8Array> => {
+    if (d.pdf.annotationStorage.size === 0) return d.baseBytes
+    try {
+      return await d.pdf.saveDocument()
+    } catch (err) {
+      throw new Error(`Form values could not be written: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  const bump = (d: Doc): Partial<Doc> => ({ rev: d.rev + 1, dirty: true })
 
   const reloadFromBytes = async (id: string, bytes: Uint8Array, annotations: Annotation[], extra: Partial<Doc> = {}): Promise<void> => {
     const d = get().docs.find((x) => x.id === id)
@@ -209,6 +231,9 @@ export const useStore = create<Store>()((set, get) => {
       annotations,
       hasForms: loaded.hasForms,
       hasSignatureFields: loaded.hasSignatureFields,
+      hasXfa: loaded.hasXfa,
+      hasJs: loaded.hasJs,
+      fieldObjects: loaded.fieldObjects,
       outline,
       currentPage: Math.min(d.currentPage, loaded.pages.length - 1),
       selectedPages: [],
@@ -224,16 +249,22 @@ export const useStore = create<Store>()((set, get) => {
     fn: (bytes: Uint8Array, d: Doc) => Promise<ops.OpResult>,
     after?: Partial<Doc>
   ): Promise<void> => {
-    const d = active()
-    if (!d) return
-    if (d.readOnly) return get().showToast('This document is read-only (password protected).', 'error')
+    const d0 = active()
+    if (!d0) return
+    if (d0.readOnly) return get().showToast('This document is read-only (password protected).', 'error')
+    if (get().busy) return
+    flushEditors()
     set({ busy: { label } })
     try {
-      const bytes = await formBytes(d)
-      const result = await fn(bytes, d)
-      const annotations = ops.remapAnnotations(d.annotations, result.map)
-      const hist = pushHistory({ ...d, baseBytes: bytes })
-      await reloadFromBytes(d.id, result.bytes, annotations, { ...hist, dirty: true, ...after })
+      await withLock(d0.id, async () => {
+        const d = get().docs.find((x) => x.id === d0.id)
+        if (!d) return
+        const bytes = await formBytes(d)
+        const result = await fn(bytes, d)
+        const annotations = ops.remapAnnotations(d.annotations, result.map)
+        const hist = pushHistory({ ...d, baseBytes: bytes })
+        await reloadFromBytes(d.id, result.bytes, annotations, { ...hist, ...bump(d), ...after })
+      })
       syncTitle()
     } catch (err) {
       get().showToast(err instanceof Error ? err.message : String(err), 'error')
@@ -241,6 +272,18 @@ export const useStore = create<Store>()((set, get) => {
       set({ busy: null })
     }
   }
+
+  /** Commit any open inline text editor so its draft is in document state before saving/printing (finding 9). */
+  const flushEditors = (): void => {
+    const el = document.activeElement as HTMLElement | null
+    if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT')) el.blur()
+  }
+
+  /** After a successful save, history snapshots that pointed at the old bytes now point at the new ones so undo does not reload pre-form-fill bytes (finding 8). */
+  const rebaseHistory = (d: Doc, oldBytes: Uint8Array, newBytes: Uint8Array): Partial<Doc> => ({
+    history: d.history.map((h) => (h.baseBytes === oldBytes ? { ...h, baseBytes: newBytes } : h)),
+    future: d.future.map((h) => (h.baseBytes === oldBytes ? { ...h, baseBytes: newBytes } : h))
+  })
 
   const targets = (indices: number[] | null, d: Doc): number[] =>
     indices && indices.length ? indices : d.selectedPages.length ? d.selectedPages : [d.currentPage]
@@ -305,6 +348,10 @@ export const useStore = create<Store>()((set, get) => {
             readOnly: loaded.encrypted,
             hasSignatureFields: loaded.hasSignatureFields,
             hasForms: loaded.hasForms,
+            hasXfa: loaded.hasXfa,
+            hasJs: loaded.hasJs,
+            fieldObjects: loaded.fieldObjects,
+            rev: 0,
             outline,
             zoom: 1,
             zoomMode: 'fit-width',
@@ -395,22 +442,29 @@ export const useStore = create<Store>()((set, get) => {
         })
         if (!ok) return false
       }
+      if (get().busy) return false
+      flushEditors()
       set({ busy: { label: 'Saving…' } })
       try {
-        const bytes = await formBytes(d)
-        const out = await writeAnnotations(bytes, d.annotations, { author: get().signerName || undefined })
-        const r = await api().doc.save(d.handle, out)
-        if (!r.ok) {
-          get().showToast(`Save failed: ${r.error}`, 'error')
-          return false
-        }
-        // Clean only after the disk commit; edits made meanwhile keep it dirty (finding 9).
-        const now = get().docs.find((x) => x.id === d.id)
-        const unchanged = now && now.annotations === d.annotations && now.baseBytes === d.baseBytes
-        patchDoc(d.id, { baseBytes: bytes, dirty: !unchanged, name: r.name })
-        syncTitle()
-        get().showToast('Saved')
-        return true
+        return await withLock(d.id, async () => {
+          const cur = get().docs.find((x) => x.id === d.id)
+          if (!cur || !cur.handle) return false
+          const rev = cur.rev
+          const bytes = await formBytes(cur)
+          const out = await writeAnnotations(bytes, cur.annotations, { author: get().signerName || undefined })
+          const r = await api().doc.save(cur.handle, out)
+          if (!r.ok) {
+            get().showToast(`Save failed: ${r.error}`, 'error')
+            return false
+          }
+          // Clean only after the disk commit; edits made meanwhile keep it dirty (finding 9).
+          const now = get().docs.find((x) => x.id === d.id)
+          if (!now) return true
+          patchDoc(d.id, { baseBytes: bytes, dirty: now.rev !== rev, name: r.name, ...rebaseHistory(now, now.baseBytes, bytes) })
+          syncTitle()
+          get().showToast(hasUnsupportedText(cur.annotations) ? 'Saved. Some characters in text boxes are not supported by the built-in font and were written as "?".' : 'Saved')
+          return true
+        })
       } catch (err) {
         get().showToast(`Save failed: ${err instanceof Error ? err.message : String(err)}`, 'error')
         return false
@@ -426,22 +480,29 @@ export const useStore = create<Store>()((set, get) => {
         get().showToast('Password-protected documents open read-only in this version.', 'error')
         return false
       }
+      if (get().busy) return false
+      flushEditors()
       set({ busy: { label: 'Saving…' } })
       try {
-        const bytes = await formBytes(d)
-        const out = await writeAnnotations(bytes, d.annotations, { author: get().signerName || undefined })
-        const r = await api().doc.saveAs(d.handle, out, d.name)
-        if (!r.ok) {
-          if (!r.cancelled) get().showToast(`Save failed: ${r.error}`, 'error')
-          return false
-        }
-        const now = get().docs.find((x) => x.id === d.id)
-        const unchanged = now && now.annotations === d.annotations && now.baseBytes === d.baseBytes
-        patchDoc(d.id, { baseBytes: bytes, dirty: !unchanged, handle: r.handle, name: r.name })
-        syncTitle()
-        void get().refreshRecent()
-        get().showToast('Saved')
-        return true
+        return await withLock(d.id, async () => {
+          const cur = get().docs.find((x) => x.id === d.id)
+          if (!cur) return false
+          const rev = cur.rev
+          const bytes = await formBytes(cur)
+          const out = await writeAnnotations(bytes, cur.annotations, { author: get().signerName || undefined })
+          const r = await api().doc.saveAs(cur.handle, out, cur.name)
+          if (!r.ok) {
+            if (!r.cancelled) get().showToast(`Save failed: ${r.error}`, 'error')
+            return false
+          }
+          const now = get().docs.find((x) => x.id === d.id)
+          if (!now) return true
+          patchDoc(d.id, { baseBytes: bytes, dirty: now.rev !== rev, handle: r.handle, name: r.name, ...rebaseHistory(now, now.baseBytes, bytes) })
+          syncTitle()
+          void get().refreshRecent()
+          get().showToast(hasUnsupportedText(cur.annotations) ? 'Saved. Some characters in text boxes are not supported by the built-in font and were written as "?".' : 'Saved')
+          return true
+        })
       } catch (err) {
         get().showToast(`Save failed: ${err instanceof Error ? err.message : String(err)}`, 'error')
         return false
@@ -453,12 +514,14 @@ export const useStore = create<Store>()((set, get) => {
     async exportFlattened() {
       const d = active()
       if (!d) return
+      if (get().busy) return
+      flushEditors()
       if (d.readOnly) return get().showToast('This document is read-only.', 'error')
       set({ busy: { label: 'Flattening…' } })
       try {
         const out = await get().buildOutput(d, { flattenAnnotations: true, flattenForms: true })
         const ok = await api().doc.exportFile(out, d.name.replace(/\.pdf$/i, '') + ' (flattened).pdf', 'pdf')
-        if (ok) get().showToast('Flattened copy saved')
+        if (ok) get().showToast('Flattened copy saved. Annotations that were already in the file stay as annotations.')
       } catch (err) {
         get().showToast(err instanceof Error ? err.message : String(err), 'error')
       } finally {
@@ -469,6 +532,8 @@ export const useStore = create<Store>()((set, get) => {
     async exportImages() {
       const d = active()
       if (!d) return
+      if (get().busy) return
+      flushEditors()
       let cancelled = false
       set({ busy: { label: 'Rendering pages…', percent: 0, cancel: () => (cancelled = true) } })
       let mat: Materialized | null = null
@@ -499,6 +564,8 @@ export const useStore = create<Store>()((set, get) => {
     async print() {
       const d = active()
       if (!d) return
+      if (get().busy) return
+      flushEditors()
       let cancelled = false
       set({ busy: { label: 'Preparing to print…', percent: 0, cancel: () => (cancelled = true) } })
       let mat: Materialized | null = null
@@ -584,7 +651,7 @@ export const useStore = create<Store>()((set, get) => {
     addAnnotation(a) {
       const d = active()
       if (!d || d.readOnly) return
-      patchDoc(d.id, (cur) => ({ ...pushHistory(cur), annotations: [...cur.annotations, a], dirty: true, selectedIds: a.kind === 'ink' || a.kind === 'highlight' || a.kind === 'underline' || a.kind === 'strikeout' ? [] : [a.id] }))
+      patchDoc(d.id, (cur) => ({ ...pushHistory(cur), ...bump(cur), annotations: [...cur.annotations, a], selectedIds: a.kind === 'ink' || a.kind === 'highlight' || a.kind === 'underline' || a.kind === 'strikeout' ? [] : [a.id] }))
       syncTitle()
     },
     updateAnnotation(id, patch, opts = {}) {
@@ -595,7 +662,7 @@ export const useStore = create<Store>()((set, get) => {
         if (idx < 0) return {}
         const annotations = cur.annotations.slice()
         annotations[idx] = { ...annotations[idx], ...patch } as Annotation
-        return { ...(opts.history === false ? {} : pushHistory(cur)), annotations, dirty: true }
+        return { ...(opts.history === false ? {} : pushHistory(cur)), ...bump(cur), annotations }
       })
       syncTitle()
     },
@@ -603,7 +670,7 @@ export const useStore = create<Store>()((set, get) => {
       const d = active()
       if (!d || !ids.length) return
       const set_ = new Set(ids)
-      patchDoc(d.id, (cur) => ({ ...pushHistory(cur), annotations: cur.annotations.filter((a) => !set_.has(a.id)), selectedIds: cur.selectedIds.filter((x) => !set_.has(x)), dirty: true }))
+      patchDoc(d.id, (cur) => ({ ...pushHistory(cur), ...bump(cur), annotations: cur.annotations.filter((a) => !set_.has(a.id)), selectedIds: cur.selectedIds.filter((x) => !set_.has(x)) }))
       syncTitle()
     },
     select(ids) {
@@ -613,39 +680,47 @@ export const useStore = create<Store>()((set, get) => {
     },
 
     async undo() {
-      const d = active()
-      if (!d || !d.history.length) return
-      const snap = d.history[d.history.length - 1]
-      const future = [...d.future, { baseBytes: d.baseBytes, annotations: cloneAnnotations(d.annotations) }]
-      const history = d.history.slice(0, -1)
-      if (snap.baseBytes !== d.baseBytes) {
-        set({ busy: { label: 'Undoing…' } })
-        try {
-          await reloadFromBytes(d.id, snap.baseBytes, snap.annotations, { history, future, dirty: true })
-        } finally {
-          set({ busy: null })
+      const d0 = active()
+      if (!d0 || !d0.history.length || get().busy) return
+      await withLock(d0.id, async () => {
+        const d = get().docs.find((x) => x.id === d0.id)
+        if (!d || !d.history.length) return
+        const snap = d.history[d.history.length - 1]
+        const future = [...d.future, { baseBytes: d.baseBytes, annotations: cloneAnnotations(d.annotations) }]
+        const history = d.history.slice(0, -1)
+        if (snap.baseBytes !== d.baseBytes) {
+          set({ busy: { label: 'Undoing…' } })
+          try {
+            await reloadFromBytes(d.id, snap.baseBytes, snap.annotations, { history, future, ...bump(d) })
+          } finally {
+            set({ busy: null })
+          }
+        } else {
+          patchDoc(d.id, { annotations: snap.annotations, history, future, ...bump(d), selectedIds: [] })
         }
-      } else {
-        patchDoc(d.id, { annotations: snap.annotations, history, future, dirty: true, selectedIds: [] })
-      }
+      })
       syncTitle()
     },
     async redo() {
-      const d = active()
-      if (!d || !d.future.length) return
-      const snap = d.future[d.future.length - 1]
-      const history = [...d.history, { baseBytes: d.baseBytes, annotations: cloneAnnotations(d.annotations) }]
-      const future = d.future.slice(0, -1)
-      if (snap.baseBytes !== d.baseBytes) {
-        set({ busy: { label: 'Redoing…' } })
-        try {
-          await reloadFromBytes(d.id, snap.baseBytes, snap.annotations, { history, future, dirty: true })
-        } finally {
-          set({ busy: null })
+      const d0 = active()
+      if (!d0 || !d0.future.length || get().busy) return
+      await withLock(d0.id, async () => {
+        const d = get().docs.find((x) => x.id === d0.id)
+        if (!d || !d.future.length) return
+        const snap = d.future[d.future.length - 1]
+        const history = [...d.history, { baseBytes: d.baseBytes, annotations: cloneAnnotations(d.annotations) }]
+        const future = d.future.slice(0, -1)
+        if (snap.baseBytes !== d.baseBytes) {
+          set({ busy: { label: 'Redoing…' } })
+          try {
+            await reloadFromBytes(d.id, snap.baseBytes, snap.annotations, { history, future, ...bump(d) })
+          } finally {
+            set({ busy: null })
+          }
+        } else {
+          patchDoc(d.id, { annotations: snap.annotations, history, future, ...bump(d), selectedIds: [] })
         }
-      } else {
-        patchDoc(d.id, { annotations: snap.annotations, history, future, dirty: true, selectedIds: [] })
-      }
+      })
       syncTitle()
     },
 
@@ -787,15 +862,21 @@ export const useStore = create<Store>()((set, get) => {
     async runSearch() {
       const d = active()
       const { find } = get()
-      if (!d || !find.query.trim()) {
+      searchSignal.cancelled = true
+      if (!d || !find.query.trim() || !find.open) {
         set((s) => ({ find: { ...s.find, matches: [], current: -1, searching: false } }))
         return
       }
       const signal = { cancelled: false }
+      searchSignal = signal
       const myQuery = find.query
+      const myCase = find.caseSensitive
+      const myPdf = d.pdf
       set((s) => ({ find: { ...s.find, searching: true, matches: [], current: -1 } }))
-      const matches = await searchDocument(d.pdf, myQuery, { caseSensitive: find.caseSensitive }, undefined, signal)
-      if (get().find.query !== myQuery || get().activeId !== d.id) return
+      const matches = await searchDocument(d.pdf, myQuery, { caseSensitive: myCase }, undefined, signal)
+      const now = get()
+      const cur = now.docs.find((x) => x.id === now.activeId)
+      if (signal.cancelled || !now.find.open || now.find.query !== myQuery || now.find.caseSensitive !== myCase || cur?.pdf !== myPdf) return
       const first = matches.findIndex((m) => m.page >= d.currentPage)
       const current = matches.length ? (first >= 0 ? first : 0) : -1
       set((s) => ({ find: { ...s.find, matches, current, searching: false } }))
@@ -810,6 +891,10 @@ export const useStore = create<Store>()((set, get) => {
     },
     setFullscreen(v) {
       set({ fullscreen: v })
+    },
+    markFormEdited(id) {
+      patchDoc(id, (cur) => bump(cur))
+      syncTitle()
     },
     setUpdateStatus(s) {
       set({ updateStatus: s })

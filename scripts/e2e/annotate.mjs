@@ -45,7 +45,28 @@ export default async ({ cdp, sleep, S }) => {
   await m(); await cdp.click(px(420), py(560)); await sleep(300)
   console.log('img elements', await cdp.eval(`JSON.stringify([...document.querySelectorAll('.img-annot')].map(e => { const r = e.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height), e.querySelector('img').naturalWidth] }))`))
   console.log('after signature', JSON.stringify(await state()))
+  // 6b. Drag the selected signature 60px right / 40px down and confirm it moved.
+  const before = await cdp.store('({ ...d.annotations.find(a => a.kind === "image").rect })')
+  const imgBox = await cdp.center('.img-annot')
+  await cdp.drag(imgBox.x, imgBox.y, imgBox.x + 60, imgBox.y + 40, 8); await sleep(300)
+  const after = await cdp.store('({ ...d.annotations.find(a => a.kind === "image").rect })')
+  const dx = (after.x - before.x) * z, dy = (before.y - after.y) * z
+  console.log('image drag moved (screen px)', Math.round(dx), Math.round(dy), Math.abs(dx - 60) < 3 && Math.abs(dy - 40) < 3 ? 'OK' : 'FAIL')
+  // 6c. Recolour the selected image? (not applicable) → recolour the rect via properties panel.
+  await cdp.eval(`window.__yonderStore.getState().select([window.__yonderStore.getState().docs[0].annotations.find(a => a.kind === 'rect').id])`); await sleep(200)
+  await cdp.eval(`[...document.querySelectorAll('.props .color')].find(b => b.title === '#3b6ff5').click()`); await sleep(200)
+  console.log('rect recoloured:', await cdp.store('d.annotations.find(a => a.kind === "rect").color'))
   await cdp.shot(`${S}/s3-page1.png`)
+  // 6d. Rotated page (index 2, /Rotate 90): place a signature and a text box there.
+  await cdp.eval(`window.__yonderStore.getState().goToPage(2)`); await sleep(1200)
+  const sig = await cdp.store('st.docs[0].annotations.find(a => a.kind === "image")')
+  await cdp.eval(`window.__yonderStore.getState().setPendingImage({ dataUrl: ${JSON.stringify('__SIG__')}.replace('__SIG__', window.__yonderStore.getState().docs[0].annotations.find(a => a.kind === 'image').dataUrl), width: ${sig.rect.width}, height: ${sig.rect.height}, role: 'signature' })`); await sleep(200)
+  const p3 = await cdp.page(2)
+  await cdp.click(p3.left + p3.width * 0.3, p3.top + 120); await sleep(300)
+  await cdp.key('t'); await sleep(200); await cdp.click(p3.left + p3.width * 0.6, p3.top + 120); await sleep(300)
+  await cdp.eval(`(() => { const t = document.querySelector('.text-edit'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(t, 'Rotated page text'); t.dispatchEvent(new Event('input', { bubbles: true })); t.blur() })()`); await sleep(300)
+  console.log('page-3 annots', JSON.stringify(await cdp.store('d.annotations.filter(a => a.page === 2).map(a => [a.kind, a.rotate])')))
+  await cdp.shot(`${S}/s3-page3.png`)
 
   // 7. Form fill on page 2.
   await cdp.eval(`window.__yonderStore.getState().goToPage(1)`); await sleep(1200)

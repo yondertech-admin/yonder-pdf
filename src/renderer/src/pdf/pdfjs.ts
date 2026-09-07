@@ -26,6 +26,23 @@ export interface LoadResult {
   encrypted: boolean
   hasSignatureFields: boolean
   hasForms: boolean
+  /** XFA forms are not supported; shown as a banner. */
+  hasXfa: boolean
+  /** Document-level or field-level JavaScript (calculations, validation) is never executed. */
+  hasJs: boolean
+  /** pdf.js field map, handed to every AnnotationLayer so linked widgets stay in sync. */
+  fieldObjects: Map<string, object[]> | null
+}
+
+/** Shared getDocument options so print/export copies resolve the same CMaps, fonts, wasm and ICC data. */
+export function documentOptions(): Record<string, unknown> {
+  return {
+    cMapUrl: ASSET_BASE + 'cmaps/',
+    cMapPacked: true,
+    standardFontDataUrl: ASSET_BASE + 'standard_fonts/',
+    wasmUrl: ASSET_BASE + 'wasm/',
+    iccUrl: ASSET_BASE + 'iccs/'
+  }
 }
 
 export class PasswordCancelled extends Error {
@@ -40,11 +57,7 @@ export async function loadPdf(
 ): Promise<LoadResult> {
   const task = pdfjs.getDocument({
     data: bytes.slice(), // pdf.js transfers the buffer to its worker; keep ours (finding 10)
-    cMapUrl: ASSET_BASE + 'cmaps/',
-    cMapPacked: true,
-    standardFontDataUrl: ASSET_BASE + 'standard_fonts/',
-    wasmUrl: ASSET_BASE + 'wasm/',
-    iccUrl: ASSET_BASE + 'iccs/'
+    ...documentOptions()
   })
   let encrypted = false
   task.onPassword = (update: (pw: string) => void, reason: number) => {
@@ -74,18 +87,34 @@ export async function loadPdf(
   }
   let hasSignatureFields = false
   let hasForms = false
+  let fieldObjects: Map<string, object[]> | null = null
   try {
-    const fields = await pdf.getFieldObjects()
-    if (fields) {
-      hasForms = Object.keys(fields).length > 0
-      for (const list of Object.values(fields)) {
+    // pdf.js 6 returns a Map (older versions returned a plain object) — support both.
+    const raw = (await pdf.getFieldObjects()) as unknown
+    const entries: Array<[string, object[]]> = raw instanceof Map ? [...raw.entries()] : raw && typeof raw === 'object' ? Object.entries(raw as Record<string, object[]>) : []
+    if (entries.length) {
+      fieldObjects = new Map(entries)
+      hasForms = true
+      for (const [, list] of entries) {
         if ((list as Array<{ type?: string }>).some((f) => f.type === 'signature')) hasSignatureFields = true
       }
     }
   } catch {
     /* no AcroForm */
   }
-  return { pdf, destroy: () => task.destroy(), pages, encrypted, hasSignatureFields, hasForms }
+  let hasJs = false
+  try {
+    const js = await pdf.getJSActions()
+    hasJs = Boolean(js && js.size > 0)
+    if (!hasJs && fieldObjects) {
+      for (const list of fieldObjects.values()) {
+        if ((list as Array<{ actions?: unknown }>).some((f) => f.actions && Object.keys(f.actions as object).length)) hasJs = true
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return { pdf, destroy: () => task.destroy(), pages, encrypted, hasSignatureFields, hasForms, hasXfa: pdf.isPureXfa, hasJs, fieldObjects }
 }
 
 export function makeViewport(page: PDFPageProxy, scale: number, viewRotation: number): PageViewport {

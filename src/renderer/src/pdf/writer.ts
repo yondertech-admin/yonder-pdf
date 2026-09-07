@@ -18,7 +18,7 @@ import {
   type PDFImage,
   type PDFObject
 } from 'pdf-lib'
-import { NOTE_ICON_SIZE, boundsOf, hexToRgb, type Annotation, type ImageAnnotation, type Rect, type TextAnnotation, type NoteAnnotation } from './types'
+import { NOTE_ICON_SIZE, arrowHeadPoints, boundsOf, hexToRgb, type Annotation, type ImageAnnotation, type Rect, type TextAnnotation, type NoteAnnotation } from './types'
 
 export interface WriteOptions {
   /** Draw annotations into page content instead of creating annotation objects. */
@@ -87,9 +87,14 @@ interface Appearance {
   rect: [number, number, number, number]
 }
 
+/** Orientation the content was placed for; falls back to the page's current /Rotate for legacy data. */
+function placementRotation(a: { rotate?: number }, page: PDFPage): number {
+  const r = typeof a.rotate === 'number' ? a.rotate : page.getRotation().angle
+  return ((r % 360) + 360) % 360
+}
+
 async function buildAppearance(ctx: Ctx, page: PDFPage, a: Annotation): Promise<Appearance | null> {
   const { doc } = ctx
-  const rot = page.getRotation().angle % 360
   switch (a.kind) {
     case 'highlight':
     case 'underline':
@@ -155,9 +160,9 @@ async function buildAppearance(ctx: Ctx, page: PDFPage, a: Annotation): Promise<
       return form(ctx, s, rectOf(b), { ExtGState: { GS: gs } })
     }
     case 'text':
-      return textAppearance(ctx, a, rot)
+      return textAppearance(ctx, a, placementRotation(a, page))
     case 'note':
-      return noteAppearance(ctx, a, rot)
+      return noteAppearance(ctx, a, placementRotation(a, page))
     default:
       return null
   }
@@ -204,16 +209,6 @@ function ellipsePath(r: Rect): string {
     `${f(cx - rx)} ${f(cy - ry * k)} ${f(cx - rx * k)} ${f(cy - ry)} ${f(cx)} ${f(cy - ry)} c ` +
     `${f(cx + rx * k)} ${f(cy - ry)} ${f(cx + rx)} ${f(cy - ry * k)} ${f(cx + rx)} ${f(cy)} c h`
   )
-}
-
-export function arrowHeadPoints(from: { x: number; y: number }, to: { x: number; y: number }, width: number): Array<{ x: number; y: number }> {
-  const len = Math.max(10, width * 4)
-  const ang = Math.atan2(to.y - from.y, to.x - from.x)
-  const spread = Math.PI / 7
-  return [
-    { x: to.x - len * Math.cos(ang - spread), y: to.y - len * Math.sin(ang - spread) },
-    { x: to.x - len * Math.cos(ang + spread), y: to.y - len * Math.sin(ang + spread) }
-  ]
 }
 
 function arrowHead(from: { x: number; y: number }, to: { x: number; y: number }, width: number): string {
@@ -416,9 +411,9 @@ async function drawImage(ctx: Ctx, page: PDFPage, a: ImageAnnotation): Promise<v
     img = a.dataUrl.startsWith('data:image/jpeg') ? await ctx.doc.embedJpg(bytes) : await ctx.doc.embedPng(bytes)
     ctx.images.set(a.dataUrl, img)
   }
-  const rot = page.getRotation().angle % 360
+  const rot = placementRotation(a, page)
   const R = a.rect
-  // Keep the image upright on screen for pages with an intrinsic /Rotate.
+  // Keep the image upright for the orientation it was placed in.
   switch (rot) {
     case 90:
       page.drawImage(img, { x: R.x + R.width, y: R.y, width: R.height, height: R.width, rotate: degrees(90) })

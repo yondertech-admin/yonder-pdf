@@ -49,6 +49,12 @@ export function PageView({ doc, index, width, height, visible }: { doc: Doc; ind
     if (!page || !visible) {
       setViewport(null)
       viewports.delete(vpKey(doc.id, index))
+      // Release the canvas backing store and layer DOM while off-screen (finding 14).
+      const c = canvasRef.current
+      if (c) c.width = c.height = 0
+      textRef.current?.replaceChildren()
+      formRef.current?.replaceChildren()
+      page?.cleanup()
       return
     }
     const canvas = canvasRef.current
@@ -97,7 +103,8 @@ export function PageView({ doc, index, width, height, visible }: { doc: Doc; ind
           annotationStorage: doc.pdf.annotationStorage,
           renderForms: !doc.readOnly,
           imageResourcesPath: ASSET_BASE + 'images/',
-          enableScripting: false
+          enableScripting: false,
+          fieldObjects: doc.fieldObjects
         })
       } catch {
         /* pages without annotations or cancelled */
@@ -109,7 +116,9 @@ export function PageView({ doc, index, width, height, visible }: { doc: Doc; ind
       task.cancel()
       textLayer.cancel()
     }
-  }, [page, visible, doc.zoom, doc.rotation, doc.id, doc.readOnly, index, doc.reloadToken])
+  }, [page, visible, doc.zoom, doc.rotation, doc.id, doc.readOnly, doc.fieldObjects, index, doc.reloadToken])
+
+  useEffect(() => () => void viewports.delete(vpKey(doc.id, index)), [doc.id, index])
 
   // Text-anchored markup: mouseup after a selection while a markup tool is active.
   const onMouseUp = (): void => {
