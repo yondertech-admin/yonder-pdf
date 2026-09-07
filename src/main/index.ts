@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeTheme, shell, session } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, session } from 'electron'
 import { join } from 'node:path'
 import { writeFileSync } from 'node:fs'
 import { AD_HOST, type MenuCommand, type OpenedFile } from '@shared/api'
@@ -107,14 +107,31 @@ function createWindow(): void {
     } catch {
       fromAd = false
     }
-    let ok = false
-    try {
-      // Ad clicks may go to any https advertiser; app links stay on the allow-list.
-      ok = fromAd ? new URL(url).protocol === 'https:' : isAllowedExternal(url)
-    } catch {
-      ok = false
+    if (fromAd) {
+      // Ad clicks may go to any https advertiser, but only after the user confirms.
+      let https = false
+      try {
+        https = new URL(url).protocol === 'https:'
+      } catch {
+        https = false
+      }
+      if (https) {
+        void dialog
+          .showMessageBox(win, {
+            type: 'question',
+            message: 'Open this advertiser link in your browser?',
+            detail: url.length > 300 ? url.slice(0, 300) + '…' : url,
+            buttons: ['Open', 'Cancel'],
+            defaultId: 0,
+            cancelId: 1
+          })
+          .then((r) => {
+            if (r.response === 0) void shell.openExternal(url)
+          })
+      }
+      return { action: 'deny' }
     }
-    if (ok) void shell.openExternal(url)
+    if (isAllowedExternal(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
   win.webContents.on('will-navigate', (e) => e.preventDefault())

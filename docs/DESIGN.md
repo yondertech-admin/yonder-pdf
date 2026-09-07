@@ -415,3 +415,14 @@ FreeText (#21 — non-WinAnsi characters become "?" and the user is told on save
 oriented quads for rotated text markup (#22), `/UserUnit` scaling (#24),
 bounded decode memory in the print window (#16 — pages are written to disk one
 at a time; Chromium decodes them all when the print dialog opens).
+
+Second pass (`docs/REVIEW-03-code-astra.md`, 14 items, no new blockers): widget
+pruning now keys off the deleted pages' `/Annots` refs, form values are carried
+across history reloads, every DOM input/change in a form bumps the edit revision,
+close waits for the document lock and re-checks dirtiness after saving, sticky
+note drafts commit live, export/print re-read the document after flushing
+editors, advertiser links ask for confirmation, new files honour the umask,
+form-flatten failures abort the export, the e2e runner only kills processes it
+started (and launches the Electron binary directly), search re-runs on document
+switch, and the print-job registration race is closed. Verified by
+`npm run e2e` and `npm run test:unit`.

@@ -198,11 +198,12 @@ export const useStore = create<Store>()((set, get) => {
   const withLock = async <T,>(id: string, fn: () => Promise<T>): Promise<T> => {
     const prev = locks.get(id) ?? Promise.resolve()
     const run = prev.then(fn, fn)
-    locks.set(id, run.catch(() => undefined))
+    const tail = run.catch(() => undefined)
+    locks.set(id, tail)
     try {
       return await run
     } finally {
-      if (locks.get(id) === run) locks.delete(id)
+      if (locks.get(id) === tail) locks.delete(id)
     }
   }
 
@@ -217,10 +218,22 @@ export const useStore = create<Store>()((set, get) => {
   }
   const bump = (d: Doc): Partial<Doc> => ({ rev: d.rev + 1, dirty: true })
 
+  /** Copy live AcroForm values from one pdf.js proxy to another (annotation ids are stable across reloads of the same file). */
+  const carryFormValues = (from: PDFDocumentProxy, to: PDFDocumentProxy): void => {
+    try {
+      const all = (from.annotationStorage as unknown as { getAll(): Record<string, unknown> | null }).getAll()
+      if (!all) return
+      for (const [key, value] of Object.entries(all)) to.annotationStorage.setValue(key, value as object)
+    } catch {
+      /* best effort */
+    }
+  }
+
   const reloadFromBytes = async (id: string, bytes: Uint8Array, annotations: Annotation[], extra: Partial<Doc> = {}): Promise<void> => {
     const d = get().docs.find((x) => x.id === id)
     if (!d) return
     const loaded = await loadPdf(bytes)
+    carryFormValues(d.pdf, loaded.pdf)
     const oldDestroy = d.destroy
     const outline = await getOutline(loaded.pdf).catch(() => [])
     patchDoc(id, {
@@ -384,16 +397,22 @@ export const useStore = create<Store>()((set, get) => {
     },
 
     async closeDoc(id) {
-      const d = get().docs.find((x) => x.id === id)
+      flushEditors()
+      let d = get().docs.find((x) => x.id === id)
       if (!d) return true
-      if (d.dirty) {
+      // Wait for any running save/page operation on this document first.
+      await withLock(id, async () => undefined)
+      d = get().docs.find((x) => x.id === id)
+      if (!d) return true
+      for (let attempt = 0; d.dirty && attempt < 3; attempt++) {
         set({ activeId: id })
         const choice = await api().doc.confirmDiscard([d.name])
         if (choice === 'cancel') return false
-        if (choice === 'save') {
-          const ok = await get().save()
-          if (!ok) return false
-        }
+        if (choice === 'discard') break
+        const ok = await get().save()
+        if (!ok) return false
+        d = get().docs.find((x) => x.id === id)
+        if (!d) return true
       }
       set((s) => {
         const docs = s.docs.filter((x) => x.id !== id)
@@ -512,10 +531,10 @@ export const useStore = create<Store>()((set, get) => {
     },
 
     async exportFlattened() {
-      const d = active()
-      if (!d) return
       if (get().busy) return
       flushEditors()
+      const d = active()
+      if (!d) return
       if (d.readOnly) return get().showToast('This document is read-only.', 'error')
       set({ busy: { label: 'Flattening…' } })
       try {
@@ -530,10 +549,10 @@ export const useStore = create<Store>()((set, get) => {
     },
 
     async exportImages() {
-      const d = active()
-      if (!d) return
       if (get().busy) return
       flushEditors()
+      const d = active()
+      if (!d) return
       let cancelled = false
       set({ busy: { label: 'Rendering pages…', percent: 0, cancel: () => (cancelled = true) } })
       let mat: Materialized | null = null
@@ -562,10 +581,10 @@ export const useStore = create<Store>()((set, get) => {
     },
 
     async print() {
-      const d = active()
-      if (!d) return
       if (get().busy) return
       flushEditors()
+      const d = active()
+      if (!d) return
       let cancelled = false
       set({ busy: { label: 'Preparing to print…', percent: 0, cancel: () => (cancelled = true) } })
       let mat: Materialized | null = null

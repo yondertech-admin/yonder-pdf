@@ -138,7 +138,7 @@ export function PageView({ doc, index, width, height, visible }: { doc: Doc; ind
     >
       <canvas ref={canvasRef} />
       <div ref={textRef} className="textLayer" />
-      <div ref={formRef} className="annotationLayer" />
+      <div ref={formRef} className="annotationLayer" onInput={() => useStore.getState().markFormEdited(doc.id)} onChange={() => useStore.getState().markFormEdited(doc.id)} />
       {viewport && <Overlay doc={doc} index={index} viewport={viewport} />}
     </div>
   )

@@ -7,6 +7,8 @@ export function FindBar(): ReactNode {
   const setFind = useStore((s) => s.setFind)
   const runSearch = useStore((s) => s.runSearch)
   const findNext = useStore((s) => s.findNext)
+  const activeId = useStore((s) => s.activeId)
+  const reloadToken = useStore((s) => s.docs.find((d) => d.id === s.activeId)?.reloadToken ?? 0)
   const input = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -21,7 +23,7 @@ export function FindBar(): ReactNode {
     if (!find.open) return
     const t = setTimeout(() => void runSearch(), 250)
     return () => clearTimeout(t)
-  }, [find.query, find.caseSensitive, find.open, runSearch])
+  }, [find.query, find.caseSensitive, find.open, activeId, reloadToken, runSearch])
 
   if (!find.open) return null
   const close = (): void => setFind({ open: false, matches: [], current: -1 })

@@ -2,10 +2,11 @@
 // built app (`npm run build` first). Usage:
 //   node scripts/e2e/cdp.mjs scripts/e2e/annotate.mjs [file.pdf]
 // Scenarios receive { cdp, sleep, S } where S is a scratch directory.
-import { spawn, execSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
+import { createRequire } from 'node:module'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 export const S = process.env.E2E_OUT ?? resolve(root, 'e2e-out')
@@ -81,18 +82,30 @@ class CDP {
 }
 
 export async function launch(pdf, env = {}) {
+  // Only processes this runner started earlier (recorded in e2e-out/.pids) are killed.
+  const pidFile = resolve(S, '.pids')
   try {
-    // Only instances launched from this repository's node_modules.
-    execSync(`pkill -9 -f ${JSON.stringify(resolve(root, 'node_modules/electron/dist'))} || true`)
-    await sleep(600)
+    const { readFileSync, rmSync } = await import('node:fs')
+    for (const pid of readFileSync(pidFile, 'utf8').split('\n').filter(Boolean)) {
+      try {
+        process.kill(Number(pid), 'SIGKILL')
+      } catch {
+        /* already gone */
+      }
+    }
+    rmSync(pidFile, { force: true })
+    await sleep(400)
   } catch {
-    /* not macOS or nothing running */
+    /* no previous run */
   }
-  const proc = spawn(resolve(root, 'node_modules/.bin/electron'), [`--remote-debugging-port=${port}`, '.', ...(pdf ? [pdf] : [])], {
+  // Launch the Electron binary itself (the node_modules/.bin shim would leave the real app orphaned on kill).
+  const electronBin = createRequire(resolve(root, 'package.json'))('electron')
+  const proc = spawn(electronBin, [`--remote-debugging-port=${port}`, '.', ...(pdf ? [pdf] : [])], {
     cwd: root,
     env: { ...process.env, YONDER_DEBUG: '1', ...env },
     stdio: ['ignore', 'pipe', 'pipe']
   })
+  writeFileSync(pidFile, `${proc.pid}\n`, { flag: 'a' })
   proc.stdout.on('data', (d) => process.stdout.write('[app] ' + d))
   proc.stderr.on('data', (d) => {
     const t = String(d)

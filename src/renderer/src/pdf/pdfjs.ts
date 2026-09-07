@@ -108,7 +108,7 @@ export async function loadPdf(
     hasJs = Boolean(js && js.size > 0)
     if (!hasJs && fieldObjects) {
       for (const list of fieldObjects.values()) {
-        if ((list as Array<{ actions?: unknown }>).some((f) => f.actions && Object.keys(f.actions as object).length)) hasJs = true
+        if ((list as Array<{ actions?: unknown }>).some((f) => f.actions && (f.actions instanceof Map ? f.actions.size > 0 : Object.keys(f.actions as object).length > 0))) hasJs = true
       }
     }
   } catch {

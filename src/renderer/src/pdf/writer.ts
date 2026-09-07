@@ -70,11 +70,11 @@ export async function writeAnnotations(bytes: Uint8Array, annotations: Annotatio
     }
   }
 
-  if (opts.flattenForms) {
+  if (opts.flattenForms && doc.catalog.has(PDFName.of('AcroForm'))) {
     try {
       doc.getForm().flatten({ updateFieldAppearances: false })
-    } catch {
-      /* documents without AcroForm or with unusual fields */
+    } catch (err) {
+      throw new Error(`Form fields could not be flattened: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

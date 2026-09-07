@@ -20,23 +20,33 @@ function materializeInherited(doc: PDFDocument): void {
   }
 }
 
-/** Drop AcroForm widgets (and empty fields) that pointed at pages no longer in the document. */
-function pruneOrphanWidgets(doc: PDFDocument): void {
+/** Annotation refs listed in /Annots of the given pages (collected *before* deletion). */
+function annotRefsOf(doc: PDFDocument, indices: number[]): Set<string> {
+  const out = new Set<string>()
+  const pages = doc.getPages()
+  for (const i of indices) {
+    const annots = pages[i]?.node.Annots()
+    if (!annots) continue
+    for (let k = 0; k < annots.size(); k++) {
+      const el = annots.get(k)
+      if (el instanceof PDFRef) out.add(el.toString())
+    }
+  }
+  return out
+}
+
+/** Remove AcroForm widgets whose annotation refs were on deleted pages; drop fields left without widgets. */
+function pruneWidgets(doc: PDFDocument, deleted: Set<string>): void {
+  if (deleted.size === 0) return
   let form
   try {
     form = doc.getForm()
   } catch {
     return
   }
-  const live = new Set(doc.getPages().map((p) => p.ref.toString()))
   for (const field of form.getFields()) {
-    const widgets = field.acroField.getWidgets()
-    const keep = widgets.filter((w) => {
-      const p = w.P()
-      return !(p instanceof PDFRef) || live.has(p.toString())
-    })
-    if (keep.length === widgets.length) continue
-    if (keep.length === 0) {
+    // A field whose dictionary is itself the widget (no /Kids) is removed outright.
+    if (deleted.has(field.ref.toString())) {
       try {
         form.removeField(field)
       } catch {
@@ -44,7 +54,25 @@ function pruneOrphanWidgets(doc: PDFDocument): void {
       }
       continue
     }
-    field.acroField.dict.set(PDFName.of('Kids'), doc.context.obj(keep.map((w) => w.dict).map((d) => doc.context.getObjectRef(d) ?? d)))
+    const kids = field.acroField.Kids()
+    if (!kids) continue
+    const keep: PDFRef[] = []
+    let removed = 0
+    for (let k = 0; k < kids.size(); k++) {
+      const el = kids.get(k)
+      if (el instanceof PDFRef && deleted.has(el.toString())) removed++
+      else if (el instanceof PDFRef) keep.push(el)
+    }
+    if (removed === 0) continue
+    if (keep.length === 0) {
+      try {
+        form.removeField(field)
+      } catch {
+        /* already detached */
+      }
+    } else {
+      field.acroField.dict.set(PDFName.of('Kids'), doc.context.obj(keep))
+    }
   }
 }
 
@@ -77,10 +105,11 @@ export async function deletePages(bytes: Uint8Array, indices: number[]): Promise
   const doc = await load(bytes)
   const set = new Set(indices)
   if (set.size >= doc.getPageCount()) throw new Error('A document must keep at least one page')
+  const deletedAnnots = annotRefsOf(doc, [...set])
   // Remove from the end so earlier indices stay valid.
   const sorted = [...set].sort((a, b) => b - a)
   for (const i of sorted) doc.removePage(i)
-  pruneOrphanWidgets(doc)
+  pruneWidgets(doc, deletedAnnots)
   const total = doc.getPageCount() + sorted.length
   const newIndex: Array<number | null> = []
   let n = 0

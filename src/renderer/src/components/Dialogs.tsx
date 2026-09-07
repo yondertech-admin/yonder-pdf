@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useActiveDoc, useStore } from '@/store/app'
 import { Modal, ExternalLink } from './ui'
 import { SignatureDialog } from './SignatureDialog'
@@ -240,13 +240,20 @@ function NoteEditor({ id, onClose }: { id: string; onClose: () => void }): React
   const remove = useStore((s) => s.removeAnnotations)
   const a = doc?.annotations.find((x) => x.id === id)
   const [text, setText] = useState(a && 'text' in a ? a.text ?? '' : '')
+  const pushed = useRef(false)
   useEffect(() => {
     if (!a) onClose()
   }, [a, onClose])
   if (!a) return null
+  // Drafts are committed to document state on every change (one undo entry for the whole edit)
+  // so Save/Print while the dialog is open never miss the text.
+  const change = (v: string): void => {
+    setText(v)
+    update(id, { text: v } as never, { history: !pushed.current })
+    pushed.current = true
+  }
   const save = (): void => {
     if (!text.trim() && a.kind === 'note') remove([id])
-    else update(id, { text } as never)
     onClose()
   }
   return (
@@ -265,7 +272,7 @@ function NoteEditor({ id, onClose }: { id: string; onClose: () => void }): React
         </>
       }
     >
-      <textarea autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder="Write your note…" />
+      <textarea autoFocus value={text} onChange={(e) => change(e.target.value)} placeholder="Write your note…" />
     </Modal>
   )
 }

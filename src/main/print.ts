@@ -21,6 +21,12 @@ export async function beginJob(ownerId: number): Promise<string> {
   const id = randomUUID()
   const dir = join(app.getPath('temp'), `yonder-print-${id}`)
   await fs.mkdir(dir, { recursive: true })
+  // The renderer may have gone away while the directory was being created.
+  const alive = BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.webContents.id === ownerId)
+  if (!alive) {
+    await fs.rm(dir, { recursive: true, force: true })
+    throw new Error('Print owner is gone')
+  }
   jobs.set(id, { dir, pages: [], owner: ownerId })
   return id
 }
