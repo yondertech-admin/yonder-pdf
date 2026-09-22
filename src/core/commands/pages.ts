@@ -100,7 +100,7 @@ export const insert: Command = {
     const sess = await doc.session()
     const at = p.after as number
     if (at > sess.pageCount) throw new YonderError('YP_PAGE_RANGE', `--after ${at} is beyond the last page (${sess.pageCount})`)
-    const inserted = await sess.insertFromPdf(await ctx.readFile(String(p.file)), at)
+    const inserted = await sess.insertFromPdf(await ctx.readFile(String(p.file), 'pdf'), at)
     doc.markStructureChanged()
     return { result: { insertedAt: at + 1, inserted, pageCount: sess.pageCount, warnings: ['forms-dropped', 'outline-dropped'] } }
   }
@@ -144,7 +144,7 @@ export const split: Command = {
     } else throw new YonderError('YP_USAGE', 'Give --every N or --ranges "1-2;3-5"')
     const parts = await ops.splitPdf(await doc.commit(), ranges)
     const pad = String(parts.length).length
-    return { result: { parts: ranges.map((r, i) => ({ index: i + 1, pages: r.map((x) => x + 1) })) }, outputs: parts.map((bytes, i) => ({ name: `${String(i + 1).padStart(pad, '0')}.pdf`, bytes })) }
+    return { result: { parts: ranges.map((r, i) => ({ index: i + 1, pages: r.map((x) => x + 1) })), warnings: ['forms-dropped', 'outline-dropped'] }, outputs: parts.map((bytes, i) => ({ name: `${String(i + 1).padStart(pad, '0')}.pdf`, bytes })) }
   }
 }
 
@@ -160,7 +160,7 @@ export const merge: Command = {
   async run(ctx, p): Promise<Outcome> {
     const files = p.files as string[]
     const sources: Uint8Array[] = []
-    for (const f of files) sources.push(await ctx.readFile(f))
+    for (const f of files) sources.push(await ctx.readFile(f, 'pdf'))
     const bytes = await ops.mergePdfs(sources)
     return { result: { merged: files.length, warnings: ['forms-dropped', 'outline-dropped'] }, outputs: [{ name: 'merged.pdf', bytes }] }
   }

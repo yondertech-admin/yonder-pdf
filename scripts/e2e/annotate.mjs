@@ -64,7 +64,14 @@ export default async ({ cdp, sleep, S }) => {
   await cdp.eval(`window.__yonderStore.getState().setPendingImage({ dataUrl: ${JSON.stringify('__SIG__')}.replace('__SIG__', window.__yonderStore.getState().docs[0].annotations.find(a => a.kind === 'image').dataUrl), width: ${sig.rect.width}, height: ${sig.rect.height}, role: 'signature' })`); await sleep(200)
   const p3 = await cdp.page(2)
   await cdp.click(p3.left + p3.width * 0.3, p3.top + 120); await sleep(300)
-  await cdp.key('t'); await sleep(200); await cdp.click(p3.left + p3.width * 0.6, p3.top + 120); await sleep(300)
+  await cdp.key('t'); await sleep(200)
+  const toolNow = await cdp.store('st.tool')
+  if (toolNow !== 'text') throw new Error(`expected the text tool after pressing "t", got "${toolNow}"`)
+  await cdp.click(p3.left + p3.width * 0.6, p3.top + 120)
+  // The inline editor mounts on the next React commit; poll instead of a fixed sleep.
+  let editorReady = false
+  for (let i = 0; i < 20 && !editorReady; i++) { await sleep(100); editorReady = await cdp.eval(`!!document.querySelector('.text-edit')`) }
+  if (!editorReady) throw new Error(`text editor did not open on the rotated page (tool=${await cdp.store('st.tool')}, annots=${await cdp.store('JSON.stringify(d.annotations.filter(a => a.page === 2).map(a => a.kind))')})`)
   await cdp.eval(`(() => { const t = document.querySelector('.text-edit'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(t, 'Rotated page text'); t.dispatchEvent(new Event('input', { bubbles: true })); t.blur() })()`); await sleep(300)
   console.log('page-3 annots', JSON.stringify(await cdp.store('d.annotations.filter(a => a.page === 2).map(a => [a.kind, a.rotate])')))
   await cdp.shot(`${S}/s3-page3.png`)

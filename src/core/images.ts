@@ -9,7 +9,17 @@ export interface ImageInfo {
   height: number
 }
 
+/** Decoded-pixel ceiling (design §14.4): 64 megapixels. */
+export const MAX_IMAGE_PIXELS = 64 * 1024 * 1024
+
 export function imageInfo(bytes: Uint8Array): ImageInfo {
+  const info = parseHeader(bytes)
+  if (!(info.width > 0 && info.height > 0)) throw new YonderError('YP_INVALID_INPUT', 'Image has no size')
+  if (info.width * info.height > MAX_IMAGE_PIXELS) throw new YonderError('YP_INVALID_INPUT', `Image is too large (${info.width}×${info.height}); the limit is 64 megapixels`)
+  return info
+}
+
+function parseHeader(bytes: Uint8Array): ImageInfo {
   if (bytes.length > 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
     return { mime: 'image/png', width: dv.getUint32(16), height: dv.getUint32(20) }

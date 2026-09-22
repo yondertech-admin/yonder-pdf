@@ -12,6 +12,8 @@ export interface SearchMatch {
   snippet: string
   /** 'estimated': axis-aligned boxes from proportional character widths. */
   quality: 'estimated'
+  /** Set on the last match of a page whose matches were cut off at the per-page cap. */
+  truncated?: boolean
 }
 
 interface TextItemLike {
@@ -128,7 +130,10 @@ export async function searchDocument(
       const s0 = Math.max(0, start - 30)
       const s1 = Math.min(pt.text.length, end + 30)
       pageMatches.push({ page: p, rects, snippet: (s0 > 0 ? '…' : '') + pt.text.slice(s0, s1).replace(/\s+/g, ' ') + (s1 < pt.text.length ? '…' : ''), quality: 'estimated' })
-      if (pageMatches.length > 2000) break
+      if (pageMatches.length >= 2000) {
+        pageMatches[pageMatches.length - 1].truncated = true
+        break
+      }
     }
     all.push(...pageMatches)
     onProgress?.(all, p)

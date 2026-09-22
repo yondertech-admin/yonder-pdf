@@ -3,6 +3,7 @@
 // keeps its byte-based undo history; the CLI `apply` batch and the local API
 // use a Session so a batch never round-trips through bytes between steps.
 import type { PDFDocument } from 'pdf-lib'
+import { YonderError } from './errors'
 import * as ops from './pageOps'
 import { writeAnnotations, type WriteOptions } from './writer'
 import { newId, type Annotation, type NewAnnotation } from './types'
@@ -19,7 +20,10 @@ export class Session {
   ) {}
 
   static async open(bytes: Uint8Array, annotations: Annotation[] = []): Promise<Session> {
-    return new Session(await ops.load(bytes), annotations.map((a) => ({ ...a })))
+    const doc = await ops.load(bytes, { ignoreEncryption: true })
+    // pdf-lib cannot re-encrypt; an encrypted document must never be rewritten as plaintext (§15 #8).
+    if (doc.isEncrypted) throw new YonderError('YP_ENCRYPTED_READ_ONLY', 'This document is encrypted; it can be read but not edited in this version')
+    return new Session(doc, annotations.map((a) => ({ ...a })))
   }
 
   get pageCount(): number {

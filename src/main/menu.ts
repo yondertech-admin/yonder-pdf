@@ -1,4 +1,5 @@
-import { app, Menu, shell, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, Menu, shell, type MenuItemConstructorOptions } from 'electron'
+import { installCli, uninstallCli } from './cli-install'
 import type { MenuCommand } from '@shared/api'
 
 type Send = (command: MenuCommand) => void
@@ -158,6 +159,9 @@ export function buildMenu(send: Send): Menu {
         { type: 'separator' },
         { label: 'Source Code on GitHub', click: () => void shell.openExternal('https://github.com/yondertech-admin/yonder-pdf') },
         { label: 'Report an Issue', click: () => void shell.openExternal('https://github.com/yondertech-admin/yonder-pdf/issues') },
+        { type: 'separator' },
+        { label: 'Install Command Line Tool…', click: () => void installCli(BrowserWindow.getFocusedWindow()) },
+        { label: 'Uninstall Command Line Tool', click: () => void uninstallCli(BrowserWindow.getFocusedWindow()) },
         ...(isMac ? [] : [{ type: 'separator' } as MenuItemConstructorOptions, cmd('Check for Updates…', 'help:checkUpdates'), cmd('About Yonder PDF', 'help:about')])
       ]
     }

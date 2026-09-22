@@ -65,9 +65,16 @@ class CDP {
     }
     await this.mouse('mouseReleased', x2, y2)
   }
+  // Coherent key metadata (code + virtual key code), as a real keyboard would send.
   async key(key, extra = {}) {
-    await this.send('Input.dispatchKeyEvent', { type: 'keyDown', key, ...extra })
-    await this.send('Input.dispatchKeyEvent', { type: 'keyUp', key, ...extra })
+    const meta = {}
+    if (/^[a-z]$/i.test(key)) Object.assign(meta, { code: 'Key' + key.toUpperCase(), windowsVirtualKeyCode: key.toUpperCase().charCodeAt(0) })
+    else if (/^[0-9]$/.test(key)) Object.assign(meta, { code: 'Digit' + key, windowsVirtualKeyCode: key.charCodeAt(0) })
+    else if (key === 'Escape') Object.assign(meta, { code: 'Escape', windowsVirtualKeyCode: 27 })
+    else if (key === 'Enter') Object.assign(meta, { code: 'Enter', windowsVirtualKeyCode: 13 })
+    else if (key === 'Backspace') Object.assign(meta, { code: 'Backspace', windowsVirtualKeyCode: 8 })
+    await this.send('Input.dispatchKeyEvent', { type: 'keyDown', key, ...meta, ...extra })
+    await this.send('Input.dispatchKeyEvent', { type: 'keyUp', key, ...meta, ...extra })
   }
   async type(text) {
     for (const ch of text) await this.send('Input.dispatchKeyEvent', { type: 'char', text: ch })

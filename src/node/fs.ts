@@ -2,8 +2,12 @@
 import { promises as fs } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 
-/** Atomic write: temp file in the same directory, fsync, then rename over target. */
-export async function writeAtomic(path: string, bytes: Uint8Array): Promise<void> {
+/**
+ * Atomic write: temp file in the same directory, fsync, then publish. With
+ * `exclusive`, publication is a hard link that fails (EEXIST) if the target
+ * appeared meanwhile — the check-then-write race is closed (REVIEW-05 #4).
+ */
+export async function writeAtomic(path: string, bytes: Uint8Array, opts: { exclusive?: boolean } = {}): Promise<void> {
   const dir = dirname(path)
   const tmp = join(dir, `.${basename(path)}.${process.pid}.${Date.now()}.tmp`)
   // Keep the target's permissions (a private 0600 file must stay private); new files honour the umask.
@@ -22,7 +26,10 @@ export async function writeAtomic(path: string, bytes: Uint8Array): Promise<void
     await fh.close()
   }
   try {
-    await fs.rename(tmp, path)
+    if (opts.exclusive) {
+      await fs.link(tmp, path)
+      await fs.rm(tmp, { force: true })
+    } else await fs.rename(tmp, path)
   } catch (err) {
     await fs.rm(tmp, { force: true })
     throw err
@@ -38,12 +45,24 @@ export async function exists(path: string): Promise<boolean> {
   }
 }
 
-/** realpath when the file exists, else the resolved absolute path (for outputs that do not exist yet). */
+/** realpath when the file exists, else the resolved absolute path (for outputs that do not exist yet). Other errors propagate. */
 export async function canonical(path: string): Promise<string> {
   try {
     return await fs.realpath(path)
-  } catch {
-    const dir = await fs.realpath(dirname(path)).catch(() => dirname(path))
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    const dir = await fs.realpath(dirname(path))
     return join(dir, basename(path))
+  }
+}
+
+/** Device + inode identity, or null when the path does not exist. */
+export async function identity(path: string): Promise<string | null> {
+  try {
+    const st = await fs.stat(path)
+    return `${st.dev}:${st.ino}`
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
   }
 }

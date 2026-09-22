@@ -83,8 +83,8 @@ export interface OpResult {
   map: PageMap
 }
 
-export async function load(bytes: Uint8Array): Promise<PDFDocument> {
-  return PDFDocument.load(bytes, { updateMetadata: false })
+export async function load(bytes: Uint8Array, opts: { ignoreEncryption?: boolean } = {}): Promise<PDFDocument> {
+  return PDFDocument.load(bytes, { updateMetadata: false, ignoreEncryption: opts.ignoreEncryption ?? false })
 }
 
 export const save = (doc: PDFDocument): Promise<Uint8Array> => doc.save({ useObjectStreams: false, addDefaultPage: false })

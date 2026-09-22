@@ -1,0 +1,17 @@
+#!/bin/sh
+# Yonder PDF command line (macOS / Linux). Runs the CLI bundle with the app's
+# own runtime, so nothing else needs to be installed. Installed into PATH by
+# "Yonder PDF ▸ Install Command Line Tool…" as a symlink to this file.
+here="$(cd "$(dirname "$0")" && pwd -P)"                     # …/Contents/Resources/bin
+res="$(dirname "$here")"                                     # …/Contents/Resources
+case "$(uname -s)" in
+  Darwin) bin="$(dirname "$(dirname "$res")")/Contents/MacOS/Yonder PDF" ;;
+  *)      bin="$(dirname "$res")/yonder-pdf-bin" ;;          # Linux: resources/ sits next to the binary
+esac
+if [ ! -x "$bin" ]; then
+  echo '{"error":{"code":"YP_INTERNAL","message":"Yonder PDF runtime not found next to the CLI"}}' >&2
+  exit 1
+fi
+# The GUI's Node/Electron switches must not leak into the CLI process.
+unset NODE_OPTIONS ELECTRON_ENABLE_LOGGING ELECTRON_ENABLE_STACK_DUMPING
+ELECTRON_RUN_AS_NODE=1 exec "$bin" "$res/cli/index.mjs" "$@"

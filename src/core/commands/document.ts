@@ -5,7 +5,7 @@ import { s } from '../schema'
 import { extractText, searchDocument } from '../text'
 import { rectToQuad } from '../text'
 import { boundsOf, translate, type Annotation } from '../types'
-import { parsePage, parseRect } from '../validate'
+import { parseColor, parseOpacity, parsePage, parsePoint, parsePositive, parseRect } from '../validate'
 import { requireDoc, sha256Hex, type Command, type Outcome } from './context'
 
 const unionRect = (rects: Array<{ x: number; y: number; width: number; height: number }>): { x: number; y: number; width: number; height: number } => {
@@ -28,12 +28,16 @@ export const info: Command = {
   async run(ctx, p): Promise<Outcome> {
     const doc = requireDoc(ctx)
     const pdf = await doc.pdfjs()
-    const pages: Array<{ page: number; width: number; height: number; rotate: number }> = []
+    const pages: unknown[] = []
     let fileAnnotations = 0
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i)
       const vp = page.getViewport({ scale: 1 })
-      pages.push({ page: i, width: +vp.width.toFixed(2), height: +vp.height.toFixed(2), rotate: page.rotate })
+      const [vx0, vy0, vx1, vy1] = page.view
+      const userUnit = (page as unknown as { userUnit?: number }).userUnit ?? 1
+      // width/height: as displayed (after /Rotate). cropBox: the unrotated user-space box that
+      // every coordinate in this API refers to (§14.1 #5); origin is not always 0,0.
+      pages.push({ page: i, width: +vp.width.toFixed(2), height: +vp.height.toFixed(2), rotate: page.rotate, cropBox: round({ x: vx0, y: vy0, width: vx1 - vx0, height: vy1 - vy0 }), ...(userUnit !== 1 ? { userUnit } : {}) })
       const annots = (await page.getAnnotations()) as Array<{ subtype?: string }>
       fileAnnotations += annots.filter((a) => a.subtype !== 'Widget' && a.subtype !== 'Link' && a.subtype !== 'Popup').length
     }
@@ -43,8 +47,13 @@ export const info: Command = {
     const fields = await listFields(pdf).catch(() => [])
     let hasJs = false
     try {
-      const js = await pdf.getJSActions()
-      hasJs = Boolean(js && Object.keys(js).length)
+      const js = (await pdf.getJSActions()) as unknown
+      hasJs = js instanceof Map ? js.size > 0 : Boolean(js && Object.keys(js as object).length)
+      if (!hasJs) {
+        const raw = (await pdf.getFieldObjects()) as unknown
+        const lists: unknown[][] = raw instanceof Map ? [...raw.values()] : raw && typeof raw === 'object' ? Object.values(raw as Record<string, unknown[]>) : []
+        for (const list of lists) if (list.some((f) => { const a = (f as { actions?: unknown }).actions; return a instanceof Map ? a.size > 0 : Boolean(a && Object.keys(a as object).length) })) hasJs = true
+      }
     } catch {
       /* none */
     }
@@ -77,13 +86,14 @@ export const info: Command = {
         metadata: { title: pick('Title'), author: pick('Author'), subject: pick('Subject'), keywords: pick('Keywords'), creator: pick('Creator'), producer: pick('Producer'), created: pick('CreationDate'), modified: pick('ModDate') },
         outline,
         capabilities: {
-          encrypted: doc.encrypted,
-          readOnly: doc.encrypted,
+          encrypted: await doc.isEncrypted(),
+          readOnly: await doc.isEncrypted(),
           hasForms: fields.length > 0,
           hasXfa: Boolean((pdf as unknown as { isPureXfa?: boolean }).isPureXfa),
           hasJs,
-          hasSignatures: fields.some((f) => f.type === 'signature')
+          hasSignatures: await doc.hasSignatures()
         },
+        rev: doc.rev,
         fieldCount: fields.length,
         fileAnnotations,
         sessionAnnotations: doc.annotations.length,
@@ -97,7 +107,7 @@ export const info: Command = {
 export const text: Command = {
   name: 'text',
   group: 'document',
-  description: 'Extract text. One page with --page, or a window of pages with --start/--limit. --layout adds a box (points, origin bottom-left) per text run.',
+  description: 'Extract text. One page with --page, or a window of pages with --start/--limit (default 20 pages; the result says where to continue). --layout adds a box (points, origin bottom-left) per text run.',
   scope: 'both',
   needsDoc: true,
   produces: 'none',
@@ -116,7 +126,7 @@ export const text: Command = {
     if (p.page !== undefined) first = last = parsePage(p.page as number, n)
     else {
       if (p.start !== undefined) first = parsePage(p.start as number, n)
-      if (p.limit !== undefined) last = Math.min(n - 1, first + (p.limit as number) - 1)
+      last = Math.min(n - 1, first + ((p.limit as number | undefined) ?? 20) - 1)
     }
     const pages: unknown[] = []
     for (let i = first; i <= last; i++) {
@@ -151,6 +161,7 @@ export const find: Command = {
     const pdf = await requireDoc(ctx).pdfjs()
     const page = p.page === undefined ? undefined : parsePage(p.page as number, pdf.numPages)
     const matches = await searchDocument(pdf, p.query as string, { caseSensitive: Boolean(p.case), pages: page === undefined ? undefined : [page] })
+    const truncated = matches.some((m) => m.truncated)
     const limit = (p.limit as number | undefined) ?? 100
     const cursor = (p.cursor as number | undefined) ?? 0
     const slice = matches.slice(cursor, cursor + limit)
@@ -160,7 +171,8 @@ export const find: Command = {
         total: matches.length,
         scope: page === undefined ? 'document' : `page ${page + 1}`,
         matches: slice.map((m, k) => ({ occurrence: cursor + k + 1, page: m.page + 1, bounds: round(unionRect(m.rects)), quads: m.rects.map(rectToQuad).map((q) => q.map((v) => +v.toFixed(2))), snippet: m.snippet, quality: m.quality })),
-        ...(cursor + limit < matches.length ? { nextCursor: cursor + limit } : {})
+        ...(cursor + limit < matches.length ? { nextCursor: cursor + limit } : {}),
+        ...(truncated ? { truncated: true, warnings: ['More than 2000 matches on a page were not counted; narrow the query.'] } : {})
       }
     }
   }
@@ -173,11 +185,13 @@ export const annotationsList: Command = {
   scope: 'both',
   needsDoc: true,
   produces: 'none',
-  params: s.obj({ page: s.int('Restrict to one page (1-based)', { minimum: 1 }) }),
+  params: s.obj({ page: s.int('Restrict to one page (1-based)', { minimum: 1 }), limit: s.int('Maximum file annotations to return (default 500)', { minimum: 1 }), cursor: s.int('Skip this many file annotations', { minimum: 0 }) }),
   async run(ctx, p): Promise<Outcome> {
     const doc = requireDoc(ctx)
     const pdf = await doc.pdfjs()
     const only = p.page === undefined ? undefined : parsePage(p.page as number, pdf.numPages)
+    const limit = (p.limit as number | undefined) ?? 500
+    const cursor = (p.cursor as number | undefined) ?? 0
     const file: unknown[] = []
     for (let i = 0; i < pdf.numPages; i++) {
       if (only !== undefined && i !== only) continue
@@ -192,7 +206,8 @@ export const annotationsList: Command = {
     const session = doc.annotations
       .filter((a) => only === undefined || a.page === only)
       .map((a) => ({ id: a.id, provenance: 'session', editable: true, removable: true, kind: a.kind, page: a.page + 1, rect: round(boundsOf(a)), ...summary(a) }))
-    return { result: { session, file } }
+    const slice = file.slice(cursor, cursor + limit)
+    return { result: { rev: doc.rev, session, file: slice, fileTotal: file.length, ...(cursor + limit < file.length ? { nextCursor: cursor + limit } : {}) } }
   }
 }
 
@@ -257,23 +272,45 @@ export const annotationsUpdate: Command = {
     if (!a) throw new YonderError('YP_NOT_FOUND', `No session annotation with id ${p.id}`, 'Only annotations created in this session or batch can be changed; annotations already in the file are read-only.')
     const allowed = STYLE_KEYS[a.kind]
     const patch: Record<string, unknown> = {}
+    const warnings: string[] = []
     for (const key of ['color', 'fill', 'width', 'opacity', 'text', 'fontSize']) {
       if (p[key] === undefined) continue
       if (!allowed.includes(key)) throw new YonderError('YP_INVALID_INPUT', `${key} does not apply to a ${a.kind} annotation`)
-      patch[key] = key === 'fill' ? (p.fill === 'none' ? null : p.fill) : p[key]
+      // Same parsers and limits as creation (REVIEW-05 #12).
+      switch (key) {
+        case 'color':
+          patch.color = parseColor(String(p.color))
+          break
+        case 'fill':
+          patch.fill = p.fill === 'none' ? null : parseColor(String(p.fill))
+          break
+        case 'width':
+          patch.width = parsePositive(p.width as number, 'width', 100)
+          break
+        case 'opacity':
+          patch.opacity = parseOpacity(p.opacity as number)
+          break
+        case 'fontSize':
+          patch.fontSize = parsePositive(p.fontSize as number, 'fontSize', 400)
+          break
+        case 'text':
+          patch.text = String(p.text)
+          if (a.kind === 'text' && /[^\x00-\xff]/.test(String(p.text))) warnings.push('Some characters are outside WinAnsi and will render as "?".')
+          break
+      }
     }
     let next: Annotation = { ...a, ...patch } as Annotation
     if (p.move !== undefined) {
-      const [dx, dy] = String(p.move).split(/[,\s]+/).map(Number)
-      if (!Number.isFinite(dx) || !Number.isFinite(dy)) throw new YonderError('YP_INVALID_INPUT', 'move must be "dx,dy"')
-      next = translate(next, dx, dy)
+      const d = parsePoint(String(p.move))
+      next = translate(next, d.x, d.y)
     }
     if (p.rect !== undefined) {
       if (!('rect' in next)) throw new YonderError('YP_INVALID_INPUT', `${a.kind} annotations have no rect; use --move`)
       next = { ...next, rect: parseRect(p.rect as string) } as Annotation
     }
     sess.update(a.id, next)
-    return { result: { updated: a.id, kind: a.kind, bounds: round(boundsOf(next)) } }
+    requireDoc(ctx).touch()
+    return { result: { updated: a.id, kind: a.kind, bounds: round(boundsOf(next)), ...(warnings.length ? { warnings } : {}) } }
   }
 }
 
@@ -290,7 +327,9 @@ export const annotationsRemove: Command = {
     const ids = p.ids as string[]
     const missing = ids.filter((id) => !sess.annotations.some((a) => a.id === id))
     if (missing.length) throw new YonderError('YP_NOT_FOUND', `Not session annotations: ${missing.join(', ')}`, 'Annotations already in the file cannot be removed in this version.')
-    return { result: { removed: sess.remove(ids) } }
+    const removed = sess.remove(ids)
+    requireDoc(ctx).touch()
+    return { result: { removed } }
   }
 }
 

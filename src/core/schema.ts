@@ -74,7 +74,10 @@ export function validate(schema: Schema, value: unknown, path = '$'): string[] {
 export function coerce(schema: Schema, value: unknown): unknown {
   if (typeof value !== 'string') return value
   if ('anyOf' in schema) {
-    for (const sub of schema.anyOf) {
+    // A JSON-looking value should become the structured alternative, not stay a string.
+    const looksJson = /^\s*[[{]/.test(value)
+    const ordered = looksJson ? [...schema.anyOf.filter((x) => !('type' in x && x.type === 'string')), ...schema.anyOf.filter((x) => 'type' in x && x.type === 'string')] : schema.anyOf
+    for (const sub of ordered) {
       const c = coerce(sub, value)
       if (validate(sub, c).length === 0) return c
     }

@@ -134,6 +134,14 @@ function createWindow(): void {
     if (isAllowedExternal(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
+  // Bare printable keys (tool shortcuts "1"–"8", "t", "n", …) have one owner: the renderer's
+  // key map. The native menu shows the same letters as hints, but must not dispatch them too
+  // (double dispatch raced with the renderer and fired while typing). Modified keys and
+  // Home/End still go through the menu.
+  win.webContents.on('before-input-event', (_e, input) => {
+    const bare = input.type === 'keyDown' && !input.control && !input.meta && !input.alt && input.key.length === 1
+    win.webContents.setIgnoreMenuShortcuts(bare)
+  })
   win.webContents.on('will-navigate', (e) => e.preventDefault())
   win.webContents.on('will-frame-navigate', (e) => {
     if (e.isMainFrame) return e.preventDefault()

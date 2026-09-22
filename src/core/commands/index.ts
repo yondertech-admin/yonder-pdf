@@ -1,7 +1,7 @@
 // The registry: every capability as data (name, schema, scope) plus `apply`
 // for batches. Front-ends (CLI, MCP, local API) iterate this list; nothing is
 // hard-coded per transport.
-import { YonderError } from '../errors'
+import { toYonderError, YonderError } from '../errors'
 import { s, validate, type Schema } from '../schema'
 import { annotateCommands } from './annotate'
 import { requireDoc, type Command, type CommandContext, type Outcome, type Params } from './context'
@@ -21,29 +21,49 @@ export const apply: Command = {
   scope: 'both',
   needsDoc: true,
   produces: 'document',
-  params: s.obj({ ops: s.arr(s.obj({ command: s.str('Command name'), params: s.record('Parameters of that command') }, ['command']), 'Operations in order', { minItems: 1 }) }, ['ops']),
-  examples: ['yonder-pdf apply --in a.pdf --out b.pdf --ops \'[{"command":"annotate.highlight","params":{"text":"Total due"}},{"command":"pages.rotate","params":{"pages":"1","by":90}}]\''],
+  params: s.obj({
+    ops: s.arr(s.obj({ command: s.str('Command name'), params: s.record('Parameters of that command') }, ['command']), 'Operations in order', { minItems: 1, maxItems: 500 }),
+    opsFile: s.str('JSON file holding the ops array (instead of --ops)')
+  }),
+  examples: ['yonder-pdf apply --in a.pdf --out b.pdf --ops \'[{"command":"annotate.highlight","params":{"text":"Total due"}},{"command":"pages.rotate","params":{"pages":"1","by":90}}]\'', 'yonder-pdf apply --in a.pdf --out b.pdf --ops-file edits.json'],
   async run(ctx, p): Promise<Outcome> {
     requireDoc(ctx)
-    const list = p.ops as Array<{ command: string; params?: Params }>
+    let list = p.ops as Array<{ command: string; params?: Params }> | undefined
+    if (p.opsFile !== undefined) {
+      if (list) throw new YonderError('YP_USAGE', 'Give either --ops or --ops-file')
+      const bytes = await ctx.readFile(String(p.opsFile), 'json')
+      let text = ''
+      for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000)))
+      try {
+        list = JSON.parse(decodeURIComponent(escape(text)))
+      } catch {
+        throw new YonderError('YP_INVALID_INPUT', '--ops-file is not valid JSON')
+      }
+      const errs = validate((apply.params as { properties: Record<string, Schema> }).properties.ops, list)
+      if (errs.length) throw new YonderError('YP_INVALID_INPUT', errs.join('; '))
+    }
+    if (!list) throw new YonderError('YP_USAGE', 'Give --ops (JSON array) or --ops-file')
     const results: unknown[] = []
     for (let i = 0; i < list.length; i++) {
       const op = list[i]
-      const cmd = get(op.command)
-      if (!cmd) throw new YonderError('YP_USAGE', `Op ${i}: unknown command "${op.command}"`, undefined, { failedIndex: i })
-      if (cmd.name === 'apply' || cmd.produces === 'file' || cmd.produces === 'files' || !cmd.needsDoc) throw new YonderError('YP_UNSUPPORTED', `Op ${i}: ${cmd.name} cannot run inside a batch (it produces separate files)`, undefined, { failedIndex: i })
-      const params = resolveRefs(op.params ?? {}, results, i)
-      const errs = validate(cmd.params, params)
-      if (errs.length) throw new YonderError('YP_INVALID_INPUT', `Op ${i} (${cmd.name}): ${errs.join('; ')}`, undefined, { failedIndex: i })
+      // Everything for one op — reference resolution, validation, execution — is attributed to it (REVIEW-05 #18).
+      const attribute = (err: unknown): YonderError => {
+        const e = toYonderError(err)
+        if (e.code === 'YP_INTERNAL' && !/^Op \d+/.test(e.message)) e.message = `Op ${i} (${op.command}): ${e.message}`
+        e.details = { ...(typeof e.details === 'object' && e.details ? e.details : {}), failedIndex: i, command: op.command }
+        return e
+      }
       try {
+        const cmd = get(op.command)
+        if (!cmd) throw new YonderError('YP_USAGE', `Op ${i}: unknown command "${op.command}"`)
+        if (cmd.name === 'apply' || cmd.produces === 'file' || cmd.produces === 'files' || !cmd.needsDoc) throw new YonderError('YP_UNSUPPORTED', `Op ${i}: ${cmd.name} cannot run inside a batch (it produces separate files)`)
+        const params = resolveRefs(op.params ?? {}, results, i)
+        const errs = validate(cmd.params, params)
+        if (errs.length) throw new YonderError('YP_INVALID_INPUT', `Op ${i} (${cmd.name}): ${errs.join('; ')}`)
         const out = await cmd.run(ctx, params)
         results.push(out.result)
       } catch (err) {
-        if (err instanceof YonderError) {
-          err.details = { ...(typeof err.details === 'object' && err.details ? err.details : {}), failedIndex: i, command: cmd.name }
-          throw err
-        }
-        throw new YonderError('YP_INTERNAL', `Op ${i} (${cmd.name}): ${err instanceof Error ? err.message : String(err)}`, undefined, { failedIndex: i })
+        throw attribute(err)
       }
     }
     return { result: { ops: results } }

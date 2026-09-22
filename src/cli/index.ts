@@ -18,11 +18,23 @@ const GLOBAL: Record<string, { type: 'string' | 'boolean'; help: string }> = {
   'password-file': { type: 'string', help: 'File containing the document password (encrypted PDFs are read-only)' },
   'expect-sha256': { type: 'string', help: 'Fail unless the input still has this hash' },
   'dry-run': { type: 'boolean', help: 'Resolve everything and report, write nothing' },
+  'acknowledge-signature-invalidation': { type: 'boolean', help: 'Allow rewriting a document that has signature fields (existing digital signatures become invalid)' },
   author: { type: 'string', help: 'Author name written into annotations' },
   deterministic: { type: 'boolean', help: 'Fixed ids and timestamps (tests)' },
   json: { type: 'boolean', help: 'Compact single-line JSON output' },
   doc: { type: 'string', help: 'Live document in the running app (needs the app; coming in the next milestone)' },
-  help: { type: 'boolean', help: 'Show help' }
+  help: { type: 'boolean', help: 'Show help' },
+  version: { type: 'boolean', help: 'Print the version' }
+}
+
+/** "--flag", "--flag=true|false|1|0|yes|no" → boolean; anything else is a usage error (REVIEW-05 #2). */
+function globalBool(key: string, v: string | boolean | undefined): boolean {
+  if (v === undefined || v === false) return false
+  if (v === true) return true
+  const t = v.trim().toLowerCase()
+  if (['true', '1', 'yes', 'on'].includes(t)) return true
+  if (['false', '0', 'no', 'off'].includes(t)) return false
+  throw new YonderError('YP_USAGE', `--${key} takes true or false, got "${v}"`)
 }
 
 const camel = (k: string): string => k.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
@@ -127,7 +139,7 @@ function usage(): string {
     lines.push(`  ${g}`)
     for (const c of commands.filter((x) => x.group === g)) lines.push(`    ${c.name.padEnd(22)} ${c.description.split(/(?<=\.)\s/)[0]}`)
   }
-  lines.push('  meta', '    schema                 JSON description of every command (--markdown for docs)', '    version', '    mcp                    Run as a Model Context Protocol server over stdio', '', 'Global options:')
+  lines.push('  meta', '    schema                 JSON description of every command (--markdown for docs)', '    status                 Is the app reachable? (headless-only in this build)', '    version', '    mcp                    Run as a Model Context Protocol server over stdio', '', 'Global options:')
   for (const [k, v] of Object.entries(GLOBAL)) lines.push(`  --${k.padEnd(16)} ${v.help}`)
   lines.push('', 'Pages are 1-based. Coordinates are PDF points, origin bottom-left, unrotated page. Colours are hex.', 'Every command prints JSON; `yonder-pdf <command> --help` shows its parameters.')
   return lines.join('\n')
@@ -181,18 +193,27 @@ function print(value: unknown, compact: boolean): void {
 
 export async function main(argv: string[]): Promise<number> {
   const parsed = parseArgv(argv)
-  const compact = parsed.options.json === true
+  const compact = globalBool('json', parsed.options.json)
+  if (parsed.options.version === true && !parsed.command) {
+    print({ version: __YONDER_VERSION__, apiVersion: describe().apiVersion }, compact)
+    return 0
+  }
   if (!parsed.command || (parsed.command === undefined && parsed.options.help)) {
     process.stdout.write(usage() + '\n')
     return parsed.options.help ? 0 : 2
   }
-  if (parsed.command === 'version' || parsed.command === '--version') {
+  if (parsed.command === 'version' || parsed.options.version === true) {
     print({ version: __YONDER_VERSION__, apiVersion: describe().apiVersion }, compact)
     return 0
   }
   if (parsed.command === 'schema') {
     if (parsed.params.markdown) process.stdout.write(markdown())
     else print(describe(), compact)
+    return 0
+  }
+  if (parsed.command === 'status') {
+    // The live-app API arrives with the next milestone; until then the headless engine is all there is.
+    print({ version: __YONDER_VERSION__, apiVersion: describe().apiVersion, app: { running: false, reason: 'local API not available in this build' }, headless: true }, compact)
     return 0
   }
   if (parsed.command === 'mcp') {
@@ -215,8 +236,10 @@ export async function main(argv: string[]): Promise<number> {
     return 0
   }
   const params = { ...parsed.params }
-  for (const [i, key] of (POSITIONAL[cmd.name] ?? []).entries()) if (parsed.positionals[i] !== undefined && params[key] === undefined) params[key] = parsed.positionals[i]
+  const slots = POSITIONAL[cmd.name] ?? []
+  for (const [i, key] of slots.entries()) if (parsed.positionals[i] !== undefined && params[key] === undefined) params[key] = parsed.positionals[i]
   try {
+    if (parsed.positionals.length > slots.length) throw new YonderError('YP_USAGE', `Unexpected argument "${parsed.positionals[slots.length]}"`, `${cmd.name} takes ${slots.length ? `positional ${slots.join(', ')}` : 'no positional arguments'}; every other value needs a --flag.`)
     if (parsed.options.doc) throw new YonderError('YP_APP_NOT_RUNNING', '--doc (live documents) is not available yet; use --in <file>')
     let password: string | undefined = process.env.YONDER_PDF_PASSWORD
     if (typeof parsed.options['password-file'] === 'string') password = readFileSync(parsed.options['password-file'], 'utf8').replace(/\r?\n$/, '')
@@ -224,10 +247,11 @@ export async function main(argv: string[]): Promise<number> {
       in: str(parsed.options.in),
       out: str(parsed.options.out),
       outDir: str(parsed.options['out-dir']),
-      inPlace: parsed.options['in-place'] === true,
-      overwrite: parsed.options.overwrite === true,
-      dryRun: parsed.options['dry-run'] === true,
-      deterministic: parsed.options.deterministic === true,
+      inPlace: globalBool('in-place', parsed.options['in-place']),
+      overwrite: globalBool('overwrite', parsed.options.overwrite),
+      dryRun: globalBool('dry-run', parsed.options['dry-run']),
+      deterministic: globalBool('deterministic', parsed.options.deterministic),
+      acknowledgeSignatureInvalidation: globalBool('acknowledge-signature-invalidation', parsed.options['acknowledge-signature-invalidation']),
       author: str(parsed.options.author),
       expectSha256: str(parsed.options['expect-sha256']),
       password

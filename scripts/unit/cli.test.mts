@@ -2,7 +2,7 @@
 // the built bundle (npm run build:cli) against test-fixtures/sample.pdf and
 // inspects outputs with pdf-lib / pdf.js instead of comparing bytes.
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PDFDocument, PDFName } from 'pdf-lib'
@@ -10,6 +10,7 @@ import { PDFDocument, PDFName } from 'pdf-lib'
 const root = new URL('../../', import.meta.url)
 const CLI = new URL('out/cli/index.mjs', root).pathname
 const FIX = new URL('test-fixtures/sample.pdf', root).pathname
+const FORMS = new URL('test-fixtures/forms.pdf', root).pathname
 const T = realpathSync(mkdtempSync(join(tmpdir(), 'yonder-cli-')))
 let failures = 0
 const check = (cond: unknown, msg: string): void => {
@@ -61,7 +62,7 @@ console.log('CLI: annotations')
 {
   const h = join(T, 'h.pdf')
   const r = cli('annotate.highlight', '--in', FIX, '--out', h, '--text', 'Signature box', '--page', '1')
-  check(r.code === 0 && r.out.result.created === 'a0001' && r.out.wrote?.[0] === h, 'highlight by anchor writes the output (deterministic id)')
+  check(r.code === 0 && r.out.result.created === 'a0001' && r.out.outputs?.[0]?.path === h && r.out.created[0] === 'a0001', 'highlight by anchor writes the output (deterministic id, top-level created)')
   check((await subtypes(h, 0)).includes('/Highlight'), 'output has a /Highlight annotation on page 1')
   const d = await load(h)
   const annots = d.getPage(0).node.Annots()!
@@ -72,7 +73,7 @@ console.log('CLI: annotations')
   const n = cli('annotate.note', '--in', FIX, '--out', join(T, 'n.pdf'), '--text', 'I agree:', '--content', 'check this')
   check(n.code === 0 && n.out.result.page === 2 && (await subtypes(join(T, 'n.pdf'), 1)).includes('/Text'), 'note anchored to text lands on page 2 as /Text')
   const dr = cli('annotate.date', '--in', FIX, '--out', join(T, 'dry.pdf'), '--page', '1', '--dry-run')
-  check(dr.code === 0 && dr.out.dryRun === true && !dr.out.wrote, 'dry run writes nothing')
+  check(dr.code === 0 && dr.out.dryRun === true && dr.out.outputs.length === 0 && !existsSync(join(T, 'dry.pdf')), 'dry run writes nothing (checked on disk)')
   const same = cli('annotate.date', '--in', FIX, '--out', FIX, '--page', '1')
   check(same.code === 4 && same.err?.error.code === 'YP_SAME_FILE', '--out equal to --in is refused (exit 4)')
   const exists = cli('annotate.date', '--in', FIX, '--out', h, '--page', '1')
@@ -81,7 +82,7 @@ console.log('CLI: annotations')
   check(bad.code === 2 && bad.err?.error.code === 'YP_INVALID_INPUT', 'negative rect size is rejected before writing')
   const png = join(T, 'sig.png')
   writeFileSync(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVQIW2NkYGD4DwABBAEAX+XLxQAAAABJRU5ErkJggg==', 'base64'))
-  const sg = cli('annotate.sign', '--in', FIX, '--out', join(T, 's.pdf'), '--file', png, '--page', '1', '--at', '80,130')
+  const sg = cli('annotate.sign', '--in', FIX, '--out', join(T, 's.pdf'), '--image', png, '--page', '1', '--at', '80,130')
   check(sg.code === 0 && sg.out.result.image.width === 2 && sg.out.result.bounds.width === 160, 'sign places a PNG at the default signature width')
   const flat = await load(join(T, 's.pdf'))
   check(!(flat.getPage(0).node.Annots()?.size()), 'signature image is flattened into the page (no annotation object)')
@@ -99,8 +100,8 @@ console.log('CLI: pages and forms')
   const badOrder = cli('pages.reorder', '--in', FIX, '--out', join(T, 're2.pdf'), '--order', '1,2,3')
   check(badOrder.code === 2, 'incomplete order is rejected')
   const sp = cli('pages.split', '--in', FIX, '--out-dir', join(T, 'parts'), '--every', '3')
-  check(sp.code === 0 && sp.out.wrote.length === 2 && (await load(sp.out.wrote[1])).getPageCount() === 1, 'split every 3 pages gives 3 + 1')
-  const mg = cli('pages.merge', '--files', FIX, sp.out.wrote[1], '--out', join(T, 'm.pdf'))
+  check(sp.code === 0 && sp.out.outputs.length === 2 && (await load(sp.out.outputs[1].path)).getPageCount() === 1 && sp.out.warnings.includes('forms-dropped'), 'split every 3 pages gives 3 + 1 and warns about dropped forms')
+  const mg = cli('pages.merge', '--files', FIX, sp.out.outputs[1].path, '--out', join(T, 'm.pdf'))
   check(mg.code === 0 && (await load(join(T, 'm.pdf'))).getPageCount() === 5, 'merge concatenates')
   const ins = cli('pages.insert-blank', '--in', FIX, '--out', join(T, 'ib.pdf'), '--after', '0')
   check(ins.code === 0 && (await load(join(T, 'ib.pdf'))).getPageCount() === 5, 'insert-blank at the beginning')
@@ -131,9 +132,73 @@ console.log('CLI: batch apply')
   const st = await subtypes(join(T, 'b.pdf'), 0)
   check(st.includes('/Highlight') && st.includes('/Text'), 'batch output keeps annotations added before and after structural ops')
   const fail = cli('apply', '--in', FIX, '--out', join(T, 'b2.pdf'), '--ops', JSON.stringify([{ command: 'annotate.highlight', params: { text: 'Signature box', page: 1 } }, { command: 'pages.delete', params: { pages: '9' } }]))
-  check(fail.code === 2 && fail.err?.error.details.failedIndex === 1 && !fail.out.wrote, 'a failing op aborts the batch and reports its index; nothing written')
+  check(fail.code === 2 && fail.err?.error.details.failedIndex === 1 && !existsSync(join(T, 'b2.pdf')), 'a failing op aborts the batch and reports its index; nothing written')
   const l = cli('annotations.list', '--in', join(T, 'b.pdf'))
   check(l.code === 0 && l.out.result.file.length === 2 && l.out.result.file.every((a: any) => a.editable === false), 'annotations.list shows file annotations as read-only')
+}
+
+console.log('CLI: review-05 paths — forms fixture, guards, rotation, ordering, options')
+{
+  const fl = cli('forms.fields', '--in', FORMS)
+  const byName = Object.fromEntries(fl.out.result.fields.map((f: any) => [f.name + (f.exportValue ? ':' + f.exportValue : ''), f]))
+  check(fl.code === 0 && byName['employeeId'].readOnly === true && byName['toppings'].multiSelect === true && byName['shipping:air'].type === 'radio', 'fields reports read-only, multi-select and radio export values')
+  const guard = cli('forms.fill', '--in', FORMS, '--out', join(T, 'g.pdf'), '--set', 'name=Ada')
+  check(guard.code === 1 && guard.err?.error.code === 'YP_SIGNATURES_PRESENT' && !existsSync(join(T, 'g.pdf')), 'rewriting a document with a signature field is refused without acknowledgement')
+  const ok = cli('forms.fill', '--in', FORMS, '--out', join(T, 'g.pdf'), '--acknowledge-signature-invalidation', '--set', 'name=Ada', '--set', 'shipping=air', '--set', 'toppings=cheese', '--set', 'toppings=peppers', '--set', 'size=L', '--set', 'subscribe=Yes')
+  const gd = await load(join(T, 'g.pdf'))
+  check(ok.code === 0 && gd.getForm().getRadioGroup('shipping').getSelected() === 'air' && gd.getForm().getDropdown('size').getSelected()[0] === 'L' && gd.getForm().getCheckBox('subscribe').isChecked(), 'radio, combo, checkbox (by export value) and text fill through pdf.js')
+  check(gd.getForm().getOptionList('toppings').getSelected().sort().join() === 'cheese,peppers', 'multi-select list box takes several values')
+  const ro = cli('forms.fill', '--in', FORMS, '--out', join(T, 'ro.pdf'), '--acknowledge-signature-invalidation', '--set', 'employeeId=X')
+  check(ro.code === 1 && ro.err?.error.code === 'YP_UNSUPPORTED', 'read-only field is refused')
+  const badOpt = cli('forms.fill', '--in', FORMS, '--out', join(T, 'bo.pdf'), '--acknowledge-signature-invalidation', '--set', 'size=XL')
+  check(badOpt.code === 2 && /Options: S, M, L/.test(badOpt.err?.error.hint ?? ''), 'unknown combo option lists the options and writes nothing')
+  const badCb = cli('forms.fill', '--in', FORMS, '--out', join(T, 'bc.pdf'), '--acknowledge-signature-invalidation', '--set', 'subscribe=maybe')
+  check(badCb.code === 2 && badCb.err?.error.code === 'YP_INVALID_INPUT', 'checkbox typo is rejected instead of silently unchecking')
+  writeFileSync(join(T, 'vals.json'), JSON.stringify({ name: 'From file', subscribe: true }))
+  const vf = cli('forms.fill', '--in', FORMS, '--out', join(T, 'vf.pdf'), '--acknowledge-signature-invalidation', '--values-file', join(T, 'vals.json'))
+  check(vf.code === 0 && (await load(join(T, 'vf.pdf'))).getForm().getTextField('name').getText() === 'From file', '--values-file fills from JSON')
+
+  // Rotated page: a display-sized default box is turned into user space (REVIEW-05 #7).
+  const rot = cli('annotate.text', '--in', FIX, '--out', join(T, 'rot-text.pdf'), '--page', '3', '--at', '100,100', '--content', 'Landscape')
+  check(rot.code === 0 && rot.out.result.bounds.width === 20.4 && rot.out.result.bounds.height === 180, 'text box on a /Rotate 90 page stores swapped width/height')
+  const rot2 = cli('annotate.text', '--in', FIX, '--out', join(T, 'rot-text2.pdf'), '--page', '1', '--at', '100,100', '--content', 'Portrait')
+  check(rot2.code === 0 && rot2.out.result.bounds.width === 180 && rot2.out.result.bounds.height === 20.4, 'same box on an unrotated page keeps display size')
+
+  // Flatten applies at its point in a batch (REVIEW-05 #9).
+  const ordered = cli('apply', '--in', FIX, '--out', join(T, 'ord.pdf'), '--ops', JSON.stringify([
+    { command: 'annotate.highlight', params: { text: 'Signature box', page: 1 } },
+    { command: 'export.flatten', params: { forms: false } },
+    { command: 'annotate.note', params: { page: 1, at: '100,100', content: 'after flatten' } },
+    { command: 'forms.flatten', params: {} },
+    { command: 'forms.fields', params: {} }
+  ]))
+  const od = await subtypes(join(T, 'ord.pdf'), 0)
+  check(ordered.code === 0 && !od.includes('/Highlight') && od.includes('/Text') && ordered.out.result.ops[4].fields.length === 0, 'annotations before a flatten are baked in, later ones stay; forms.flatten hides fields from later ops')
+  check((await load(join(T, 'ord.pdf'))).getForm().getFields().length === 0, 'flattened output has no fields')
+
+  // Options and contracts.
+  const dryStr = cli('annotate.date', '--in', FIX, '--out', join(T, 'dry2.pdf'), '--page', '1', '--dry-run=true')
+  check(dryStr.code === 0 && dryStr.out.dryRun === true && !existsSync(join(T, 'dry2.pdf')), '--dry-run=true is a real dry run')
+  const dryBad = cli('annotate.date', '--in', FIX, '--out', join(T, 'dry3.pdf'), '--page', '1', '--dry-run=maybe')
+  check(dryBad.code === 2 && !existsSync(join(T, 'dry3.pdf')), 'a non-boolean global flag is a usage error')
+  const au = cli('annotate.note', '--in', FIX, '--out', join(T, 'au.pdf'), '--page', '1', '--at', '100,100', '--content', 'x', '--author', 'Ada Lovelace')
+  const aud = await load(join(T, 'au.pdf'))
+  const noteDict = aud.context.lookup(aud.getPage(0).node.Annots()!.get(0)) as any
+  check(au.code === 0 && noteDict.get(PDFName.of('T')).decodeText() === 'Ada Lovelace', '--author is written as the annotation /T')
+  const surplus = cli('info', '--in', FIX, 'extra.pdf')
+  check(surplus.code === 2 && /Unexpected argument/.test(surplus.err?.error.message ?? ''), 'a surplus positional argument is rejected')
+  const badRef = cli('apply', '--in', FIX, '--out', join(T, 'br.pdf'), '--ops', JSON.stringify([{ command: 'annotate.note', params: { page: 1, at: '1,1', content: '$3.created' } }]))
+  check(badRef.code === 2 && badRef.err?.error.details.failedIndex === 0, 'an invalid $ref is attributed to its op')
+  const st = cli('status')
+  check(st.code === 0 && st.out.app.running === false, 'status reports the app as not reachable')
+  const ver = cli('--version')
+  check(ver.code === 0 && typeof ver.out.version === 'string', '--version prints the version')
+  const up = cli('apply', '--in', FIX, '--out', join(T, 'up.pdf'), '--ops', JSON.stringify([{ command: 'annotate.rect', params: { page: 1, rect: '10,10,50,50' } }, { command: 'annotations.update', params: { id: '$0.created', color: 'garbage' } }]))
+  check(up.code === 2 && up.err?.error.details.failedIndex === 1 && !existsSync(join(T, 'up.pdf')), 'annotations.update validates colours like creation does')
+  const quadsArr = cli('annotate.underline', '--in', FIX, '--out', join(T, 'qa.pdf'), '--page', '1', '--quads', JSON.stringify([[60, 700, 200, 700, 60, 688, 200, 688]]))
+  check(quadsArr.code === 0 && (await subtypes(join(T, 'qa.pdf'), 0)).includes('/Underline'), 'quads accept the array form from find')
+  const strokeW = cli('annotate.rect', '--in', FIX, '--out', join(T, 'sw.pdf'), '--text', 'Signature box', '--page', '1', '--width', '3')
+  check(strokeW.code === 0 && strokeW.out.result.bounds.width < 70, 'stroke --width does not change anchored rect sizing')
 }
 
 console.log('MCP: stdio handshake, tools/list, tools/call')

@@ -4,7 +4,7 @@
 import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 
 type PdfjsModule = typeof import('pdfjs-dist')
@@ -23,11 +23,26 @@ export function assetDir(): string {
   return resolve(dirname(require.resolve('pdfjs-dist/package.json')))
 }
 
+/** The legacy build: packaged next to the CLI bundle, or from node_modules in development. */
+function pdfjsModulePath(): string {
+  const here = dirname(fileURLToPath(import.meta.url))
+  for (const candidate of [join(here, 'pdfjs', 'legacy', 'pdf.mjs'), join(here, '..', 'pdfjs', 'legacy', 'pdf.mjs')]) if (existsSync(candidate)) return candidate
+  return createRequire(import.meta.url).resolve('pdfjs-dist/legacy/build/pdf.mjs')
+}
+
 async function pdfjs(): Promise<PdfjsModule> {
   if (!mod) {
-    const require = createRequire(import.meta.url)
-    const path = require.resolve('pdfjs-dist/legacy/build/pdf.mjs')
-    mod = import(/* @vite-ignore */ path) as Promise<PdfjsModule>
+    // At import time pdf.js probes for @napi-rs/canvas and its DOM polyfills (only needed for
+    // rasterising) and warns when they are absent. Rendering is app-scoped in this milestone;
+    // keep stderr clean so agents do not mistake the probe for an error.
+    const warn = console.warn
+    console.warn = (...args: unknown[]) => {
+      const text = String(args[0])
+      if (!text.includes('@napi-rs/canvas') && !text.includes('DOMMatrix')) warn(...args)
+    }
+    mod = (import(/* @vite-ignore */ pathToFileURL(pdfjsModulePath()).href) as Promise<PdfjsModule>).finally(() => {
+      console.warn = warn
+    })
   }
   return mod
 }

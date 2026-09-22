@@ -26,6 +26,8 @@ export interface WriteOptions {
   /** Flatten AcroForm fields (keeps existing appearances). */
   flattenForms?: boolean
   author?: string
+  /** Clock for /ModDate (deterministic builds); defaults to now. */
+  now?: number
 }
 
 const f = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFixed(3).replace(/\.?0+$/, ''))
@@ -78,7 +80,7 @@ export async function writeAnnotations(bytes: Uint8Array, annotations: Annotatio
     }
   }
 
-  doc.setModificationDate(new Date())
+  doc.setModificationDate(new Date(opts.now ?? Date.now()))
   return doc.save({ useObjectStreams: false, addDefaultPage: false })
 }
 

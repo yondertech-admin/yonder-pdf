@@ -693,3 +693,32 @@ Full findings: `docs/REVIEW-04-automation-design-astra.md` (25 items). Decisions
 | 23 | Full JSON-RPC 2.0 framing, `YP_*` codes in `error.data`, CLI exit codes, pagination for `text`/`find`/`annotations`, private artifact dir, `render`/`reload` registered. |
 | 24 | Semantic parity instead of byte identity; `YONDER_DETERMINISTIC=1` for tests; tests check values, appearances and geometry. |
 | 25 | Milestones reordered: A0 spikes first; `Session` + `documentService` in A1; MCP prototyped in A2; isolated e2e `userData`; fixture set expanded. |
+
+## 16. Automation code review outcomes (Codex / GPT-6 Astra, 2026-09-22)
+
+Full findings: `docs/REVIEW-05-automation-code-astra.md` (22 items, milestone A2). Decisions:
+
+| # | Decision |
+|---|---|
+| 1 | Signature fields are detected from pdf.js field objects regardless of widget geometry; every rewrite of such a document needs `--acknowledge-signature-invalidation` (`YP_SIGNATURES_PRESENT` otherwise). Enforced centrally in the runner. |
+| 2 | Global CLI booleans accept `--flag`, `--flag=true/false/1/0/yes/no` and nothing else; MCP validates the complete advertised tool schema (I/O parameters included) before interpreting anything. |
+| 3 | Encryption is detected with pdf-lib's `/Encrypt` check, cached per document, and `assertEditable()` runs before any mutating command (form fills included). `info.capabilities.encrypted` uses the same check. |
+| 4 | Outputs are published with a hard link (`EEXIST` closes the check-then-write race) unless `--overwrite`; `--in-place` re-hashes the input immediately before replacing it; same-file detection compares device+inode; `canonical()` only swallows `ENOENT`. |
+| 5 | Files open in the app: still not coordinated (needs the A3 socket). Documented limitation until then; `--in-place` remains explicit opt-in. |
+| 6 | Packaged pdf.js: the legacy build **and its worker** ship in `Resources/cli/pdfjs/`; the adapter resolves that path first and node_modules only in development. Verified from an unsigned packaged bundle. |
+| 7 | Automatic (display-sized) boxes for oriented annotations are swapped into user space on 90°/270° pages; explicit `--rect` is taken literally. |
+| 8 | Rotated/vertical text anchors: deferred; geometry stays `quality: 'estimated'` (axis-aligned). Tracked for Phase 3 with the annotation-import work. |
+| 9 | `forms.flatten` and `export.flatten` **materialise at their position** in a batch (bytes rewritten, consumed session annotations cleared, both engines reopened). |
+| 10 | Choice values are validated against options; combo boxes take one value, list boxes take several only when `multiSelect`; checkboxes accept booleans, `true/false/on/off` or the export value, anything else is `YP_INVALID_INPUT`; all assignments are validated before the storage is touched. |
+| 11 | Auxiliary reads are bounded by kind (PDF 1 GiB, image 64 MiB, JSON 16 MiB); images must have positive dimensions ≤ 64 MP; batches ≤ 500 ops. Concurrency/time limits arrive with the utility-process runner (A3). |
+| 12 | `annotations.update` uses the creation parsers (`parseColor`, `parsePositive`, `parseOpacity`, `parsePoint`) and the same WinAnsi warning. |
+| 13 | Placement takes an explicit `SizePolicy { size, explicit, oriented }`; stroke `--width` never affects anchored box sizing. |
+| 14 | `rev` is a logical mutation counter (annotation/structure/form changes), not a serialisation count; reported by `info`, `annotations.list` and edit results. Revision-bound `matchId` deferred to the live API. |
+| 15 | `hasJs` handles the Map returned by pdf.js and field-level actions; `info.pages[]` adds `cropBox` (unrotated user-space box every coordinate refers to) and `userUnit` when ≠ 1. |
+| 16 | Results carry top-level `created[]`, `warnings[]` (aggregated from nested batch results) and `outputs[{path, sha256}]`; split reports form/outline loss. |
+| 17 | `--author` and a deterministic clock flow through `WriteOptions` (`author`, `now`) into `/T` and `/ModDate`. |
+| 18 | Batch attribution wraps reference resolution, validation and execution together; page-op errors map to `YP_PAGE_RANGE`/`YP_INVALID_INPUT` instead of `YP_INTERNAL`. |
+| 19 | `text` defaults to a 20-page window with `nextStart`; `find` reports `truncated` when a page hit the 2000-match cap; `annotations.list` paginates file annotations (`limit`/`cursor`, `fileTotal`). |
+| 20 | `--version` works, surplus positionals are rejected, help no longer mentions `--text-anchor`, markup `quads` accept the array from `find`, `apply --ops-file` reads a JSON file. |
+| 21 | Added `signatures.list` and `annotate.sign/initial --saved <id>` (read-only access to the app's settings file), `forms.fill --values-file`, `status`. Image commands take `--image`. Saved-signature add/remove, `--remove-white`, typed signatures and rendering stay app-scoped (A3). README wording qualified. |
+| 22 | New fixture `test-fixtures/forms.pdf` (radio, read-only, multi-select list, combo, checkbox, bare `/Sig` field) and tests for the signature guard, rotated-page sizing, flatten ordering, boolean options, author, bad `$ref` attribution, surplus arguments, array quads, and on-disk absence after dry runs and failures. Encrypted fixtures still to be added (no generator in the toolchain yet). |

@@ -13,7 +13,7 @@ Free, open-source PDF viewer and editor for macOS, Windows and Linux. View, anno
 - **Pages**: rotate, reorder (drag thumbnails), delete, insert blank, insert from another PDF, extract, split, merge
 - **Output**: save / save as (annotations are real PDF annotations with appearance streams, readable by Acrobat, Preview, Chrome…), flatten, export pages as PNG, print
 - **App**: native menu and shortcuts, Finder / Explorer file association, drag & drop, recent files, unsaved-changes guard, updates from GitHub Releases
-- **Automation**: every feature is also a command — `yonder-pdf` on the command line and an MCP server for AI agents such as Claude Code (see below)
+- **Automation**: the editing engine is also a command line and an MCP server for AI agents such as Claude Code — inspect, search, annotate, sign with an image, fill and flatten forms, page operations, batches (see below); driving the running app comes next
 
 ## Install
 
@@ -65,7 +65,7 @@ Model Context Protocol: `node out/cli/index.mjs mcp` serves every command as a t
 claude mcp add yonder-pdf -- node /path/to/yonder-pdf/out/cli/index.mjs mcp
 ```
 
-Headless today: inspect, search, annotate, sign with an image, fill and flatten forms, page operations, batch `apply`. Driving the running app (live documents, rendering, printing, typed signatures) is the next milestone — see `docs/DESIGN.md` §14.
+Headless today: inspect, search, annotate, sign with an image or a saved signature, fill and flatten forms, page operations, batch `apply`. Not yet: driving the running app (live documents, rendering, printing, typed signatures, saving signatures) — that is the next milestone, see `docs/DESIGN.md` §14. Documents that contain signature fields are only rewritten with `--acknowledge-signature-invalidation`; encrypted documents are read-only. Inside the packaged macOS app the command lives at `Contents/Resources/bin/yonder-pdf`; **Yonder PDF ▸ Install Command Line Tool…** links it into your PATH.
 
 ## Architecture
 

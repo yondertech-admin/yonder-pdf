@@ -14,11 +14,13 @@ Pages are 1-based. Coordinates are PDF points, origin bottom-left, unrotated pag
 - `--password-file` — File containing the document password (encrypted PDFs are read-only)
 - `--expect-sha256` — Fail unless the input still has this hash
 - `--dry-run` — Resolve everything and report, write nothing
+- `--acknowledge-signature-invalidation` — Allow rewriting a document that has signature fields (existing digital signatures become invalid)
 - `--author` — Author name written into annotations
 - `--deterministic` — Fixed ids and timestamps (tests)
 - `--json` — Compact single-line JSON output
 - `--doc` — Live document in the running app (needs the app; coming in the next milestone)
 - `--help` — Show help
+- `--version` — Print the version
 
 Exit codes: 0 ok · 1 failed · 2 usage/validation · 3 app not running · 4 conflict (output exists, same file, hash mismatch).
 
@@ -40,7 +42,7 @@ yonder-pdf info --in report.pdf --json
 
 ### `text`
 
-Extract text. One page with --page, or a window of pages with --start/--limit. --layout adds a box (points, origin bottom-left) per text run.
+Extract text. One page with --page, or a window of pages with --start/--limit (default 20 pages; the result says where to continue). --layout adds a box (points, origin bottom-left) per text run.
 
 Scope: both · needs `--in`: yes · writes: none
 
@@ -83,6 +85,8 @@ Scope: both · needs `--in`: yes · writes: none
 | Parameter | Type | Description |
 |---|---|---|
 | `--page` | integer | Restrict to one page (1-based) |
+| `--limit` | integer | Maximum file annotations to return (default 500) |
+| `--cursor` | integer | Skip this many file annotations |
 
 ### `annotations.update`
 
@@ -126,7 +130,7 @@ Scope: both · needs `--in`: yes · writes: document
 | `--occurrence` | integer | Which occurrence of the anchor text (1-based) |
 | `--page` | integer | Page number (1-based) |
 | `--case` | boolean | Case-sensitive anchor match |
-| `--quads` | string | Explicit quads "ulx,uly,urx,ury,llx,lly,lrx,lry;…" (with --page) |
+| `--quads` | string \| array | Explicit quads (with --page): a string or the `quads` array from find |
 | `--color` | string | Colour, hex (default #ffd400) |
 | `--opacity` | number | Opacity 0–1 (default 1) |
 
@@ -147,7 +151,7 @@ Scope: both · needs `--in`: yes · writes: document
 | `--occurrence` | integer | Which occurrence of the anchor text (1-based) |
 | `--page` | integer | Page number (1-based) |
 | `--case` | boolean | Case-sensitive anchor match |
-| `--quads` | string | Explicit quads "ulx,uly,urx,ury,llx,lly,lrx,lry;…" (with --page) |
+| `--quads` | string \| array | Explicit quads (with --page): a string or the `quads` array from find |
 | `--color` | string | Colour, hex (default #e5484d) |
 | `--opacity` | number | Opacity 0–1 (default 1) |
 
@@ -168,7 +172,7 @@ Scope: both · needs `--in`: yes · writes: document
 | `--occurrence` | integer | Which occurrence of the anchor text (1-based) |
 | `--page` | integer | Page number (1-based) |
 | `--case` | boolean | Case-sensitive anchor match |
-| `--quads` | string | Explicit quads "ulx,uly,urx,ury,llx,lly,lrx,lry;…" (with --page) |
+| `--quads` | string \| array | Explicit quads (with --page): a string or the `quads` array from find |
 | `--color` | string | Colour, hex (default #e5484d) |
 | `--opacity` | number | Opacity 0–1 (default 1) |
 
@@ -179,7 +183,7 @@ yonder-pdf annotate.strikeout --in a.pdf --out b.pdf --page 2 --quads "72,700,30
 
 ### `annotate.text`
 
-Add a text box (FreeText). Place with --page + --rect/--at, or anchor with --text-anchor (default: below the anchor). Only WinAnsi characters render; others become "?" (reported in warnings).
+Add a text box (FreeText). Place with --page + --rect/--at, or anchor it with --text "words" (default: below the anchor). Only WinAnsi characters render; others become "?" (reported in warnings).
 
 Scope: both · needs `--in`: yes · writes: document
 
@@ -331,7 +335,8 @@ Scope: both · needs `--in`: yes · writes: document
 
 | Parameter | Type | Description |
 |---|---|---|
-| `--file` (required) | string | PNG or JPEG file |
+| `--image` | string | PNG or JPEG file |
+| `--saved` | string | Use a signature/initials saved in the app instead of --image (see signatures.list) |
 | `--page` | integer | Page number (1-based) |
 | `--rect` | string | Box "x,y,width,height" (image is stretched to it) |
 | `--at` | string | Bottom-left corner "x,y" (sized by --width, aspect kept) |
@@ -342,7 +347,7 @@ Scope: both · needs `--in`: yes · writes: document
 | `--offset` | string | Extra offset "dx,dy" in points after alignment |
 
 ```
-yonder-pdf annotate.image --in a.pdf --out b.pdf --file image.png --text "Signature:" --align right
+yonder-pdf annotate.image --in a.pdf --out b.pdf --image image.png --text "Signature:" --align right
 ```
 
 ### `annotate.stamp`
@@ -353,7 +358,8 @@ Scope: both · needs `--in`: yes · writes: document
 
 | Parameter | Type | Description |
 |---|---|---|
-| `--file` (required) | string | PNG or JPEG file |
+| `--image` | string | PNG or JPEG file |
+| `--saved` | string | Use a signature/initials saved in the app instead of --image (see signatures.list) |
 | `--page` | integer | Page number (1-based) |
 | `--rect` | string | Box "x,y,width,height" (image is stretched to it) |
 | `--at` | string | Bottom-left corner "x,y" (sized by --width, aspect kept) |
@@ -364,18 +370,19 @@ Scope: both · needs `--in`: yes · writes: document
 | `--offset` | string | Extra offset "dx,dy" in points after alignment |
 
 ```
-yonder-pdf annotate.stamp --in a.pdf --out b.pdf --file stamp.png --text "Signature:" --align right
+yonder-pdf annotate.stamp --in a.pdf --out b.pdf --image stamp.png --text "Signature:" --align right
 ```
 
 ### `annotate.sign`
 
-Place a signature image (visual signing; flattened into the page on save). Typed signatures need the app.
+Place a signature image (--image file or --saved id; visual signing, flattened into the page on save). Typed signatures need the app.
 
 Scope: both · needs `--in`: yes · writes: document
 
 | Parameter | Type | Description |
 |---|---|---|
-| `--file` (required) | string | PNG or JPEG file |
+| `--image` | string | PNG or JPEG file |
+| `--saved` | string | Use a signature/initials saved in the app instead of --image (see signatures.list) |
 | `--page` | integer | Page number (1-based) |
 | `--rect` | string | Box "x,y,width,height" (image is stretched to it) |
 | `--at` | string | Bottom-left corner "x,y" (sized by --width, aspect kept) |
@@ -386,18 +393,19 @@ Scope: both · needs `--in`: yes · writes: document
 | `--offset` | string | Extra offset "dx,dy" in points after alignment |
 
 ```
-yonder-pdf annotate.sign --in a.pdf --out b.pdf --file signature.png --text "Signature:" --align right
+yonder-pdf annotate.sign --in a.pdf --out b.pdf --image signature.png --text "Signature:" --align right
 ```
 
 ### `annotate.initial`
 
-Place an initials image (visual signing; flattened on save).
+Place an initials image (--image file or --saved id; visual signing, flattened on save).
 
 Scope: both · needs `--in`: yes · writes: document
 
 | Parameter | Type | Description |
 |---|---|---|
-| `--file` (required) | string | PNG or JPEG file |
+| `--image` | string | PNG or JPEG file |
+| `--saved` | string | Use a signature/initials saved in the app instead of --image (see signatures.list) |
 | `--page` | integer | Page number (1-based) |
 | `--rect` | string | Box "x,y,width,height" (image is stretched to it) |
 | `--at` | string | Bottom-left corner "x,y" (sized by --width, aspect kept) |
@@ -408,7 +416,7 @@ Scope: both · needs `--in`: yes · writes: document
 | `--offset` | string | Extra offset "dx,dy" in points after alignment |
 
 ```
-yonder-pdf annotate.initial --in a.pdf --out b.pdf --file initials.png --text "Signature:" --align right
+yonder-pdf annotate.initial --in a.pdf --out b.pdf --image initials.png --text "Signature:" --align right
 ```
 
 ### `annotate.date`
@@ -431,6 +439,12 @@ Scope: both · needs `--in`: yes · writes: document
 yonder-pdf annotate.date --in a.pdf --out b.pdf --page 1
 yonder-pdf annotate.date --in a.pdf --out b.pdf --text "Date:" --align right
 ```
+
+### `signatures.list`
+
+List the signatures and initials saved in the Yonder PDF app (use with annotate.sign --saved <id>).
+
+Scope: both · needs `--in`: no · writes: none
 
 ## pages
 
@@ -555,7 +569,7 @@ yonder-pdf pages.merge --files a.pdf b.pdf --out merged.pdf
 
 ### `forms.fields`
 
-List form fields: name, type (text, checkbox, radio, combobox, listbox, signature), current value, export values / options, read-only flag, page and box.
+List form fields: name, type (text, checkbox, radio, combobox, listbox, signature), current value, export values / options, read-only and multi-select flags, page and box.
 
 Scope: both · needs `--in`: yes · writes: none
 
@@ -565,7 +579,7 @@ yonder-pdf forms.fields --in form.pdf --json
 
 ### `forms.fill`
 
-Fill fields. --set name=value (repeatable; "true"/"false" or the export value for checkboxes, the export value for radios) or --values as a JSON object {name: value} where value is a string, boolean or string[] (listbox). Appearances are generated by the same engine the app uses.
+Fill fields. --set name=value (repeatable; "true"/"false" or the export value for checkboxes, the export value for radios), --values as a JSON object {name: value}, or --values-file <file.json>. Values: string, boolean or string[] (multi-select listbox). Every assignment is validated before anything is written; appearances are generated by the same engine the app uses.
 
 Scope: both · needs `--in`: yes · writes: document
 
@@ -573,15 +587,17 @@ Scope: both · needs `--in`: yes · writes: document
 |---|---|---|
 | `--set` | array | Assignments |
 | `--values` | object | Object of field values {name: value} |
+| `--values-file` | string | JSON file with {name: value} |
 | `--flatten` | boolean | Also flatten the form after filling |
 
 ```
 yonder-pdf forms.fill --in form.pdf --out filled.pdf --set name="Ada Lovelace" --set agree=true
+yonder-pdf forms.fill --in form.pdf --out filled.pdf --values-file answers.json
 ```
 
 ### `forms.flatten`
 
-Flatten form fields into page content (keeps current appearances; fields stop being editable).
+Flatten form fields into page content now (keeps current appearances; fields stop existing for every later operation and for the output).
 
 Scope: both · needs `--in`: yes · writes: document
 
@@ -589,7 +605,7 @@ Scope: both · needs `--in`: yes · writes: document
 
 ### `export.flatten`
 
-Write a flattened copy: session annotations drawn into page content (--annotations, default) and/or form fields flattened (--forms). Annotations that were already in the file stay as annotations.
+Flatten now: session annotations are drawn into page content (--annotations, default true) and/or form fields are flattened (--forms, default true). Applies at this point of a batch; annotations added later stay annotations. Annotations that were already in the file are unchanged.
 
 Scope: both · needs `--in`: yes · writes: document
 
@@ -600,6 +616,7 @@ Scope: both · needs `--in`: yes · writes: document
 
 ```
 yonder-pdf export.flatten --in a.pdf --out a-flat.pdf
+yonder-pdf apply --in a.pdf --out b.pdf --ops '[{"command":"annotate.highlight","params":{"text":"Total"}},{"command":"export.flatten","params":{}}]'
 ```
 
 ## batch
@@ -612,8 +629,10 @@ Scope: both · needs `--in`: yes · writes: document
 
 | Parameter | Type | Description |
 |---|---|---|
-| `--ops` (required) | array | Operations in order |
+| `--ops` | array | Operations in order |
+| `--ops-file` | string | JSON file holding the ops array (instead of --ops) |
 
 ```
 yonder-pdf apply --in a.pdf --out b.pdf --ops '[{"command":"annotate.highlight","params":{"text":"Total due"}},{"command":"pages.rotate","params":{"pages":"1","by":90}}]'
+yonder-pdf apply --in a.pdf --out b.pdf --ops-file edits.json
 ```

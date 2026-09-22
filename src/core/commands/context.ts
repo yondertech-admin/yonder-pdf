@@ -4,6 +4,7 @@
 // then commits. Commands never touch the file system themselves.
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { YonderError } from '../errors'
+import { hasSignatureFields } from '../forms'
 import * as ops from '../pageOps'
 import type { Schema } from '../schema'
 import { Session } from '../session'
@@ -18,72 +19,105 @@ export interface LoadedPdfjs {
 
 export type PdfjsLoader = (bytes: Uint8Array, password?: string) => Promise<LoadedPdfjs>
 
+export interface SavedSignatureRef {
+  id: string
+  kind: 'signature' | 'initials'
+  dataUrl: string
+  width: number
+  height: number
+  createdAt: number
+}
+
 /**
  * One input document across a command or a batch: pdf-lib Session for
  * structure + annotations, a pdf.js proxy for text/forms, both opened lazily
  * and kept consistent (structure changes are flushed to bytes before pdf.js
- * sees them; form fills replace the bytes and reopen the session).
+ * sees them; form fills and flattening replace the bytes and reopen the
+ * session). `rev` counts logical mutations, not serialisations (REVIEW-05 #14).
  */
 export class InputDoc {
   private _session: Session | null = null
   private _pdfjs: LoadedPdfjs | null = null
   private structureDirty = false
   private pendingAnnotations: Annotation[] = []
-  /** Set by flatten commands, consumed at commit. */
-  commitOptions: WriteOptions = {}
-  /** Rewrites of bytes performed so far (form fills); reported as `revAfter`. */
+  private _encrypted: boolean | null = null
+  /** Logical edit revision: bumped on every annotation, structure or form change. */
   rev = 0
+  /** Set by the loader when a password was needed (pdf.js), or by pdf-lib's /Encrypt check. */
   encrypted = false
+  /** Warnings collected by commands (reported at the top level of the result). */
+  warnings: string[] = []
 
   constructor(
     private readonly loader: PdfjsLoader,
     public bytes: Uint8Array,
-    public readonly password?: string
+    public readonly password?: string,
+    private readonly writeDefaults: WriteOptions = {}
   ) {}
 
   get annotations(): Annotation[] {
     return this._session ? this._session.annotations : this.pendingAnnotations
   }
 
+  /** Called by commands after any mutation. */
+  touch(): void {
+    this.rev++
+  }
+
   async session(): Promise<Session> {
     if (!this._session) {
-      try {
-        this._session = await Session.open(this.bytes, this.pendingAnnotations)
-      } catch (err) {
-        if (err instanceof Error && /encrypted/i.test(err.message)) throw new YonderError('YP_ENCRYPTED_READ_ONLY', 'This document is encrypted; it can be read but not edited in this version')
-        throw err
-      }
+      this._session = await Session.open(this.bytes, this.pendingAnnotations)
       this.pendingAnnotations = []
+      this._encrypted = false
     }
     return this._session
+  }
+
+  /** True when pdf-lib sees /Encrypt (cheap check, cached). */
+  async isEncrypted(): Promise<boolean> {
+    if (this._encrypted === null) {
+      const doc = await ops.load(this.bytes, { ignoreEncryption: true })
+      this._encrypted = doc.isEncrypted
+      if (this._encrypted) this.encrypted = true
+    }
+    return this._encrypted
+  }
+
+  /** Throws unless the document may be rewritten (§15 #8). */
+  async assertEditable(): Promise<void> {
+    if (await this.isEncrypted()) throw new YonderError('YP_ENCRYPTED_READ_ONLY', 'This document is encrypted; it can be read but not edited in this version')
+  }
+
+  async hasSignatures(): Promise<boolean> {
+    return hasSignatureFields(await this.pdfjs())
   }
 
   /** Call after a page operation so pdf.js consumers see the new structure. */
   markStructureChanged(): void {
     this.structureDirty = true
+    this.touch()
   }
 
   async pdfjs(): Promise<PDFDocumentProxy> {
     if (this.structureDirty) await this.flushStructure()
     if (!this._pdfjs) {
       this._pdfjs = await this.loader(this.bytes, this.password)
-      this.encrypted = this._pdfjs.encrypted
+      if (this._pdfjs.encrypted) this.encrypted = true
     }
     return this._pdfjs.pdf
   }
 
   /** Serialise structural changes (no annotations) so bytes reflect them. */
-  private async flushStructure(): Promise<void> {
+  async flushStructure(): Promise<void> {
     if (!this._session || !this.structureDirty) return
     this.bytes = await ops.save(this._session.doc)
     this.pendingAnnotations = this._session.annotations
     this._session = null
     this.structureDirty = false
-    this.rev++
     await this.dropPdfjs()
   }
 
-  /** Replace the underlying bytes (after a pdf.js form save); annotations are kept. */
+  /** Replace the underlying bytes (after a pdf.js form save); pending annotations are kept. */
   async replaceBytes(bytes: Uint8Array): Promise<void> {
     if (this._session) {
       if (this.structureDirty) throw new YonderError('YP_INTERNAL', 'Structure changes were not flushed before a form fill')
@@ -91,7 +125,24 @@ export class InputDoc {
       this._session = null
     }
     this.bytes = bytes
-    this.rev++
+    this.touch()
+    await this.dropPdfjs()
+  }
+
+  /**
+   * Bake flattening into the bytes *now*, so later operations in a batch see
+   * the flattened document (REVIEW-05 #9). Flattened session annotations are
+   * consumed; form fields stop existing.
+   */
+  async materialize(opts: { flattenAnnotations?: boolean; flattenForms?: boolean }): Promise<void> {
+    await this.flushStructure()
+    const annotations = this.annotations
+    const bytes = await writeAnnotations(this.bytes, opts.flattenAnnotations ? annotations : [], { ...this.writeDefaults, flattenAnnotations: Boolean(opts.flattenAnnotations), flattenForms: Boolean(opts.flattenForms) })
+    const keep = opts.flattenAnnotations ? [] : annotations
+    this._session = null
+    this.pendingAnnotations = keep
+    this.bytes = bytes
+    this.touch()
     await this.dropPdfjs()
   }
 
@@ -108,9 +159,9 @@ export class InputDoc {
   }
 
   async commit(): Promise<Uint8Array> {
-    const opts = this.commitOptions
+    const opts = this.writeDefaults
     if (this._session) return this._session.commit(opts)
-    if (this.pendingAnnotations.length || opts.flattenForms || opts.flattenAnnotations) return writeAnnotations(this.bytes, this.pendingAnnotations, opts)
+    if (this.pendingAnnotations.length) return writeAnnotations(this.bytes, this.pendingAnnotations, opts)
     return this.bytes
   }
 
@@ -129,14 +180,16 @@ export class InputDoc {
 export interface CommandContext {
   /** The input document for `needsDoc` commands. */
   doc?: InputDoc
-  /** Read another file the command refers to (images, PDFs to insert/merge). */
-  readFile(path: string): Promise<Uint8Array>
+  /** Read another file the command refers to (images, PDFs to insert/merge); bounded by `kind`. */
+  readFile(path: string, kind: 'pdf' | 'image' | 'json'): Promise<Uint8Array>
   loadPdfjs: PdfjsLoader
   deterministic: boolean
   now(): number
   newId(): string
   /** Written as the annotation author (/T). */
   author?: string
+  /** The app's saved signatures/initials, when reachable (read-only headlessly). */
+  savedSignatures?(): Promise<SavedSignatureRef[]>
 }
 
 export interface Outcome {

@@ -6,7 +6,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { commands, describe } from '@core/commands/index'
 import { toYonderError } from '@core/errors'
-import { s, type Schema } from '@core/schema'
+import { s, validate, type Schema } from '@core/schema'
 import { runHeadless, type RunOptions } from '@node/runner'
 
 declare const __YONDER_VERSION__: string
@@ -19,7 +19,8 @@ const IO: Record<string, Schema> = {
   overwrite: s.bool('Replace an existing output'),
   dryRun: s.bool('Resolve and report without writing'),
   author: s.str('Author name written into annotations'),
-  expectSha256: s.str('Fail unless the input still has this SHA-256')
+  expectSha256: s.str('Fail unless the input still has this SHA-256'),
+  acknowledgeSignatureInvalidation: s.bool('Allow rewriting a document that has signature fields (existing digital signatures become invalid)')
 }
 
 const toolName = (name: string): string => 'yonder_' + name.replace(/[.-]/g, '_')
@@ -29,7 +30,7 @@ function toolSchema(params: Schema, needsDoc: boolean, produces: string): Schema
   if (!('type' in base) || base.type !== 'object') return base
   const io: Record<string, Schema> = {}
   if (needsDoc) io.in = IO.in
-  if (produces === 'document') Object.assign(io, { out: IO.out, inPlace: IO.inPlace, overwrite: IO.overwrite, dryRun: IO.dryRun, author: IO.author, expectSha256: IO.expectSha256 })
+  if (produces === 'document') Object.assign(io, { out: IO.out, inPlace: IO.inPlace, overwrite: IO.overwrite, dryRun: IO.dryRun, author: IO.author, expectSha256: IO.expectSha256, acknowledgeSignatureInvalidation: IO.acknowledgeSignatureInvalidation })
   if (produces === 'file') Object.assign(io, { out: IO.out, overwrite: IO.overwrite, dryRun: IO.dryRun })
   if (produces === 'files') Object.assign(io, { outDir: IO.outDir, overwrite: IO.overwrite, dryRun: IO.dryRun })
   return { type: 'object', properties: { ...io, ...base.properties }, required: [...(needsDoc ? ['in'] : []), ...(base.required ?? [])], additionalProperties: false }
@@ -54,6 +55,9 @@ export async function serve(): Promise<void> {
     const cmd = commands.find((c) => toolName(c.name) === req.params.name)
     if (!cmd) return { isError: true, content: [{ type: 'text', text: `Unknown tool ${req.params.name}` }] }
     const args = { ...((req.params.arguments ?? {}) as Record<string, unknown>) }
+    // Validate the complete advertised schema (IO parameters included) before anything is interpreted (REVIEW-05 #2).
+    const errs = validate(toolSchema(cmd.params, cmd.needsDoc, cmd.produces), args)
+    if (errs.length) return { isError: true, content: [{ type: 'text', text: `YP_INVALID_INPUT: ${errs.join('; ')}` }], structuredContent: { error: { code: 'YP_INVALID_INPUT', message: errs.join('; ') } } }
     const opts: RunOptions = {}
     for (const key of Object.keys(IO)) {
       if (args[key] === undefined) continue
@@ -63,7 +67,7 @@ export async function serve(): Promise<void> {
     if (process.env.YONDER_PDF_PASSWORD) opts.password = process.env.YONDER_PDF_PASSWORD
     try {
       const res = await runHeadless(cmd.name, args, opts)
-      const summary = res.wrote ? `${cmd.name}: wrote ${res.wrote.join(', ')}` : res.dryRun ? `${cmd.name}: dry run, nothing written` : `${cmd.name}: ok`
+      const summary = res.outputs.length ? `${cmd.name}: wrote ${res.outputs.map((o) => o.path).join(', ')}` : res.dryRun ? `${cmd.name}: dry run, nothing written` : `${cmd.name}: ok`
       return { content: [{ type: 'text', text: summary + '\n' + JSON.stringify(res, null, 2) }], structuredContent: res as unknown as Record<string, unknown> }
     } catch (err) {
       const e = toYonderError(err)
