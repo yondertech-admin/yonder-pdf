@@ -426,3 +426,270 @@ form-flatten failures abort the export, the e2e runner only kills processes it
 started (and launches the Electron binary directly), search re-runs on document
 switch, and the print-job registration race is closed. Verified by
 `npm run e2e` and `npm run test:unit`.
+
+## 14. Automation surface — CLI, local API, MCP (design v2, 2026-09-22)
+
+Requirement (product owner, 2026-09-22): **every feature of Yonder PDF must be
+reachable through a command line or a local API**, so that an external agent
+such as Claude Code can open, inspect and edit PDFs with the app. The app itself
+stays free of AI code: no model, no cloud calls, no telemetry. The agent lives
+outside and calls in. v1 of this design was reviewed by Codex/Astra
+(`docs/REVIEW-04-automation-design-astra.md`, 25 items); the decisions are in
+§15 and are folded into the text below.
+
+### 14.1 Principles
+
+1. **One command registry, three front-ends.** Each capability is a `Command`
+   `{ name, params: JSON Schema, result: JSON Schema, scope: 'headless'|'app', run }`.
+   The registry is exposed as (a) the `yonder-pdf` CLI, (b) a JSON-RPC 2.0
+   endpoint on a private local socket inside the running app, and (c) an MCP
+   server over stdio. A feature is not "done" until it is in the registry; the
+   UI is another caller of the same document services (§14.4).
+2. **Headless first.** Parse, text, search, annotate, forms, page operations
+   and flatten run in a plain Node process with no app. Rasterisation
+   (`render`, `export images`, `print`), typed signatures (canvas fonts) and
+   session control (`open`, `state`, undo/redo, selection) are **app-scoped**
+   in v1. Headless rendering with `@napi-rs/canvas` is a product decision
+   deferred to after A4, not a pdf.js limitation (§15 #16).
+3. **Explicit targets, never guessed.** A command edits either a file
+   (`--in <path>`) or a live document (`--doc <id>`). The CLI never switches
+   between them on its own. Writing a file that is open in the app is refused
+   (`YP_FILE_OPEN_IN_APP`, hint: use `--doc`), exporting to another path is
+   allowed. Optional `--expect-rev` / `--expect-sha256` make edits conditional.
+4. **Agent-friendly addressing.** Placement commands accept explicit PDF
+   user-space geometry **or a text anchor** (`--text "Total due"
+   [--occurrence N] [--page N] [--align below|above|left|right --offset x,y]`).
+   Several matches without `--occurrence` is an error (`YP_AMBIGUOUS_ANCHOR`)
+   that lists the candidates. `find` returns the same geometry with a
+   `quality: 'exact' | 'estimated'` flag, so an agent can inspect, then edit.
+   `--dry-run` resolves targets and reports warnings without writing.
+5. **1-based pages and hex colours at the boundary**, 0-based and normalised
+   internally. Rects are `x,y,w,h` in points, origin bottom-left, unrotated
+   page (the §4.1 model). Every input is validated against the command's JSON
+   Schema plus semantic checks (finite numbers, positive sizes, page in range,
+   colour format) before any writer runs. Responses are JSON when `--json` is
+   given (always for API/MCP).
+6. **Same writers, semantic parity.** The CLI calls the same `writeAnnotations`,
+   page-ops and form code as the app, so output is semantically identical
+   (same objects, appearances, geometry). Byte identity is *not* promised:
+   IDs, timestamps and `/ModDate` differ. `YONDER_DETERMINISTIC=1` fixes them
+   for tests.
+7. **Local only, same user only.** No TCP listener. The API socket lives in a
+   `0700` directory under `userData`, the token in a `0600` file, and the
+   handshake must present the token. Processes running as the same user are
+   trusted — they can already read and write the user's files. No stronger
+   guarantee is claimed (§15 #3).
+
+### 14.2 Layout
+
+```
+src/core/                 headless engine — pure TS, no DOM, no Electron (tsconfig.core.json has no DOM lib)
+  types.ts  writer.ts  pageOps.ts       moved from src/renderer/src/pdf (A1, done)
+  session.ts                             Session: one pdf-lib PDFDocument + annotation list + page map; ops mutate, commit() saves once
+  pdfjs-node.ts / pdfjs-browser.ts       adapters: legacy build + packaged CMap/font paths in Node; existing loader in the renderer
+  text.ts                                pdf.js text extraction + literal search (regex deferred)
+  forms.ts                               pdf.js annotationStorage + saveDocument() — the one form backend (§12 #15–16)
+  anchors.ts                             text anchor → quads / rect, ambiguity + quality
+  images.ts                              PNG/JPEG decode, white-background removal (pngjs), ImageAnnotation builder
+  validate.ts                            schema + semantic validation, page/colour/rect parsers, ordered permutations
+  commands/                              registry: document.ts annotate.ts pages.ts forms.ts export.ts app.ts index.ts
+src/cli/                  argv front-end; built by vite.cli.config.ts (lib mode, node target) → out/cli/index.mjs
+src/mcp/                  MCP stdio front-end (@modelcontextprotocol/sdk), same registry
+src/main/api/             socket server, token, handshake, request routing, utilityProcess worker pool
+src/renderer/src/services/documentService.ts   parameterised document operations shared by the store and the bridge
+docs/CLI.md               generated from the registry (`yonder-pdf schema --markdown`)
+```
+
+### 14.3 Commands (registry v1) and coverage matrix
+
+Headless commands take `--in` (and `--out` for edits); app commands take
+`--doc <id>` (default: active document). Commands marked **both** accept either.
+
+| Group | Command | Scope | Notes |
+|---|---|---|---|
+| document | `info` | both | pages (size, rotation, cropbox), metadata, outline, **capabilities** `{ encrypted, readOnly, hasForms, hasXfa, hasJs, hasSignatures }`, annotation count, `rev`, `sha256` |
+| | `text [--page] [--layout] [--limit/--cursor]` | both | paginated; `--layout` adds per-line rects |
+| | `find <query> [--page] [--case] [--limit/--cursor]` | both | literal only in v1; returns page, quads, `quality`, context, `matchId` bound to `rev` |
+| | `annotations list` | both | each with `provenance: 'session' \| 'file'`, `editable`, `removable` |
+| | `annotations update --id [--set k=v …] [--move dx,dy] [--rect …] [--text …]` | both | session annotations only; file annotations → `YP_UNSUPPORTED` (Phase 3) |
+| | `annotations remove --id …` | both | session annotations only |
+| annotate | `highlight / underline / strikeout` | both | `--text` anchor or `--quads`; colour, opacity |
+| | `text` (FreeText) | both | `--rect` or `--at x,y --width`, font size, colour; non-WinAnsi characters reported in `warnings` |
+| | `note`, `rect`, `ellipse`, `line`, `arrow`, `ink --path "x,y x,y …"` | both | geometry, stroke, fill, width, opacity |
+| | `image / stamp --file png\|jpg [--remove-white]` | both | `--rect` or `--at + --width`; role image/stamp |
+| | `date [--format]` | both | the toolbar date stamp |
+| | `sign / initial --image file` | both | role signature/initials, flattened on save (visual signing, §12 #8) |
+| | `sign / initial --typed "Name" --font …` | app | needs canvas fonts; `--saved <id>` uses a saved signature |
+| | `signatures list / add --image / remove` | both | the saved-signature store (`settings` in main) |
+| pages | `rotate --pages 1-3 --by 90\|-90\|180` | both | ranges use `parsePageRanges` |
+| | `delete --pages`, `extract --pages --out`, `split --every N \| --ranges … --out-dir` | both | split output `<base>-<n>.pdf`, refuses collisions |
+| | `reorder --order 3,1,2` | both | complete permutation, validated (not a range) |
+| | `insert-blank --after N [--size]`, `insert --file x.pdf --after N`, `merge --files … --out` | both | `--after 0` = beginning; copy-based ops return `warnings: ['forms-dropped','outline-dropped']` (§12 #13) |
+| forms | `fields` | both | name, type, value, export values, options, readOnly, widgets (page, rect) |
+| | `fill --json file \| --set name=value …` | both | values typed: string \| boolean \| string[]; read-only fields rejected; pdf.js backend |
+| | `flatten-forms` | both | |
+| export | `flatten [--annotations] [--forms]` | both | session annotations only (file annotations unchanged, §13 #20) |
+| | `render --page --dpi --format png\|jpeg --out` | app | writes to `--out` or a private artifact dir; ≤ 16 MiB inline over MCP as image content, else a resource |
+| | `images --dpi --format --out-dir`, `print [--printer]` | app | |
+| batch | `apply <ops.json>` | both | ordered single-input → single-output ops on one `Session`; page refs are post-previous-op; later ops may reference earlier results (`$ref`); one commit; on failure nothing is written and `failedIndex` is reported; live batch = one undo entry |
+| app | `docs`, `open <file> [--page]`, `activate --doc`, `save [--doc]`, `save-as --out`, `close [--discard]`, `close-all`, `reveal`, `reload` | app | `close` on a dirty document is an error unless `--discard` |
+| | `state [--doc]` | app | active doc, page, zoom, rotation, selection, tool, dirty, rev |
+| | `view --page N \| --zoom fit-width\|fit-page\|actual\|<n> \| --rotate 0\|90\|180\|270` | app | |
+| | `select --ids … \| --all \| --none`, `select-pages …` | app | |
+| | `undo`, `redo` | app | |
+| | `recent list / open <id> / clear` | app | |
+| | `settings get/set theme\|sidebar\|signerName\|defaultZoom` | app | |
+| | `update check` | app | `update install` stays UI-only (irreversible, needs a relaunch) |
+| meta | `schema [--markdown]`, `version`, `status` (is the app running, API version) | headless | |
+
+Coverage (every `Actions` member, `MenuCommand` and `YonderAPI` entry):
+
+- Mapped above: open/openRecent/closeDoc/closeAll/setActive/save/saveAs/
+  buildOutput/exportFlattened/exportImages/print/merge, add/update/remove
+  annotations, select, undo/redo, zoom/rotation/page navigation, selectPages,
+  every page op, extract/split, setTheme/setSidebar/setSignerName, runSearch,
+  recent list/clear, signatures list/add/remove, update check.
+- **Excluded, UI-only by nature:** `setTool`/`setStyle`/`setPendingImage`
+  (tool state for pointer gestures; the CLI passes style per command),
+  `setDialog`, `showToast`, `busy`, `setFullscreen`, `findNext` (cursor within
+  the find bar), `markFormEdited` (internal callback), `app:onOpenFile` /
+  `menu:onCommand` (event subscriptions), `shell:openExternal` (never a
+  command), `update install`, the drawing canvas of the signature dialog
+  (drawn signatures enter as `--image`).
+
+### 14.4 Front-ends and the document service
+
+**Document service (renderer).** `services/documentService.ts` holds the
+parameterised operations the store actions currently inline: every function
+takes an explicit `docId`, runs under the document's operation lock, flushes
+open editors first, checks `expectRev` when given, and returns typed results or
+throws structured errors. It is **non-interactive**: anything that would need
+a dialog (password, overwrite, signature-invalidation consent) returns
+`YP_NEEDS_INPUT` with `data.needs`. The Zustand actions become thin wrappers
+that add UI concerns (toasts, dialogs, busy state). The bridge calls the
+service, never the store.
+
+**CLI.** `yonder-pdf` is `out/cli/index.mjs` executed by the app's Electron
+binary with `ELECTRON_RUN_AS_NODE=1`. The `RunAsNode` fuse therefore stays
+**enabled** (documented trade-off, §15 #19). The shim unsets `NODE_OPTIONS`,
+`ELECTRON_RUN_AS_NODE` and `ELECTRON_*` before launching the GUI (`open`).
+Packaging:
+- macOS: `Contents/Resources/bin/yonder-pdf` (from `extraResources`, executable
+  bit preserved, signed and notarised with the app). Menu *Yonder PDF ▸ Install
+  Command Line Tool…* symlinks into `~/.local/bin` (created if needed, PATH
+  hint shown), or `/usr/local/bin` when writable; refuses when the app runs
+  from a DMG or a translocated path; *Uninstall* removes the link. The link
+  targets the app's real path and is re-validated on each launch.
+- Development: `npm run cli -- <args>` (runs `out/cli` under the dev Electron).
+- Windows and Linux launchers: after the macOS release (§15 #21).
+
+**Local API (app).** Main starts a JSON-RPC 2.0 server (newline-delimited
+frames, ≤ 64 MiB each, larger rejected before parse) on
+`userData/api/sock` (macOS/Linux, path length checked; Windows named pipe
+`\\.\pipe\yonder-pdf-<random>`). `userData/api/endpoint.json` (`0600`, written
+atomically) holds `{ apiVersion, socket, token, pid, startedAt }`; the token is
+32 random bytes, per launch, never in argv, logs, renderer state or `schema`
+output. A stale endpoint whose `pid` is dead is removed at startup. First frame
+must be `auth { token }` within 2 s. Development, e2e and packaged builds use
+separate `userData` profiles (`YONDER_PROFILE`). Requests carry an optional
+`idempotencyKey`; the server keeps results for 10 minutes and replays them.
+
+Headless commands received over the socket run in an Electron
+`utilityProcess` worker (one per document, cancellable, 120 s time limit,
+input ≤ 1 GiB, decoded image ≤ 64 MP), never on the main event loop. App
+commands go to the renderer over one IPC channel `agent:command`
+`{ requestId, docHandle?, command, params }` — params never contain paths;
+main resolves `--in/--out/--file` into handles and request-scoped write
+capabilities first. Replies are matched by `requestId`, validated
+(`sender.frame` check as in `ipc.ts`), time out at 60 s, and fail with
+`YP_RENDERER_GONE` if the window is destroyed.
+
+**MCP.** `yonder-pdf mcp` uses `@modelcontextprotocol/sdk` (stdio transport,
+initialize/capabilities handled by the SDK). stdout is protocol-only; every
+diagnostic goes to stderr (pdf.js warnings are redirected). Each registry
+command becomes a tool with its JSON Schema; results carry
+`structuredContent` (the JSON) plus a one-line text summary, `isError` on
+failure. Rendered pages ≤ 1 MiB return as image content; larger outputs are
+written to a private `0700` artifact directory with a 24 h expiry and returned
+as `yonder://artifact/<id>` resources that the server can read back.
+Claude Code setup: `claude mcp add yonder-pdf -- yonder-pdf mcp`.
+
+### 14.5 Contracts
+
+- **Errors:** JSON-RPC `error.code` -32000…-32099 with
+  `data: { code: 'YP_…', hint, details }`. CLI exit codes: 0 ok, 1 command
+  failed, 2 usage/validation, 3 app not running, 4 conflict (`expect-rev`,
+  file open in app, output exists).
+- **Results** of every edit: `{ target: { file|docId }, revBefore, revAfter,
+  sha256, created: [ids], warnings: [], outputs: [paths] }`.
+- **Files:** paths are resolved with `realpath`; `--out` equal to `--in` is an
+  error unless `--in-place`; an existing `--out` is refused unless
+  `--overwrite`; "open in app" detection compares `realpath` + device/inode.
+- **Guards:** encrypted documents are read-only (password via
+  `--password-file`, `YONDER_PDF_PASSWORD` or an interactive prompt, never
+  argv); documents with signature fields require
+  `--acknowledge-signature-invalidation` before any rewrite (§12 #17); lossy
+  copy-based operations report what was dropped.
+- **Registry versioning:** `schema.apiVersion`; breaking changes bump it and
+  the CLI prints a deprecation note for one minor release.
+
+### 14.6 Testing
+
+- Core unit tests under Node (`scripts/unit`): writer, pageOps, session,
+  forms, anchors, validate; registry self-test (every command's example
+  validates against its schema).
+- Fixtures: `sample.pdf` plus encrypted, signed (`/Sig` field), AcroForm with
+  checkbox/radio/choice, rotated + CropBox + `/UserUnit` pages, Unicode text,
+  and malformed inputs.
+- CLI golden tests with `YONDER_DETERMINISTIC=1`: structure (objects,
+  `/Subtype`, `/AP`), form values after fill, rendered geometry of anchors.
+- Socket e2e: the CDP harness launches the built app with an **isolated
+  `userData`**, connects a Node client, runs `open → highlight --text → save`,
+  asserts UI state, then tests auth failure, a bad frame, a renderer reload
+  mid-request and restart cleanup.
+- MCP smoke: `tools/list`, one `tools/call`, one resource read via the SDK client.
+- Packaged: `yonder-pdf --version` from a signed, notarised, quarantined build.
+
+### 14.7 Milestones (v2 order)
+
+| # | Milestone | Exit criteria |
+|---|---|---|
+| A0 | Feasibility spikes | packaged `ELECTRON_RUN_AS_NODE` entry prints JSON and exit codes on the signed binary; pdf.js legacy build extracts text and fills a form in Node with packaged CMaps/fonts; stdio stays clean |
+| A1 | Core extraction (**done**) + `Session` + `documentService` | app unchanged (`e2e`, unit); page ops run on the session; store actions call the service |
+| A2 | Registry + validation + headless CLI (document, annotate, pages, forms, flatten, apply, schema) + MCP prototype + `docs/CLI.md` | golden tests pass; MCP `tools/list` works; schemas reviewed for agent use |
+| A3 | Local API on macOS: socket, token, worker, bridge, app commands, `Install Command Line Tool…`, `extraResources` shim | socket e2e passes; shim works from a notarised build on a clean machine |
+| A4 | MCP completion (resources, images), Windows/Linux launchers, headless render decision | Claude Code highlights text in a fixture through MCP; installer tests |
+
+Each milestone gets a Codex/Astra review before it is declared done (§10).
+
+## 15. Automation design review outcomes (Codex / GPT-6 Astra, 2026-09-22)
+
+Full findings: `docs/REVIEW-04-automation-design-astra.md` (25 items). Decisions:
+
+| # | Decision |
+|---|---|
+| 1 | No dirtiness-based routing. Explicit `--in` (file) or `--doc` (live) target; writing a file that is open in the app is refused; `--expect-rev`/`--expect-sha256` guards. (§14.1 #3) |
+| 2 | A parameterised, locked, non-interactive `documentService` in the renderer is the backend for both the store and the bridge; store actions become wrappers. (§14.4) |
+| 3 | Security model stated honestly: `0700` dir + `0600` token + handshake; same-user processes are trusted; no peer-UID/DACL claims. Windows pipe hardening is a prerequisite for enabling the API there (A4). |
+| 4 | `endpoint.json` discovery file, atomic write, 2 s auth timeout, dead-pid cleanup, per-profile `userData`, token never in argv/logs/renderer/schema. |
+| 5 | No generic registry call from the renderer. One `agent:command` IPC with request IDs, main-resolved handles and write capabilities, sender validation, timeouts, renderer-crash failure. |
+| 6 | Headless work over the socket runs in `utilityProcess` workers with size/time/concurrency limits; frames capped at 64 MiB before parse; `find` is literal-only in v1 (no user regex). |
+| 7 | Forms keep the pdf.js backend (`annotationStorage` + `saveDocument()`) in both app and CLI via `core/forms.ts`; typed values; read-only rejected; export values listed by `fields`. |
+| 8 | `info.capabilities`; encrypted → read-only; signature-invalidation acknowledgement flag; lossy operations report drops; passwords never in argv. |
+| 9 | Full coverage matrix in §14.3 with explicit exclusions (tool/style/dialog/toast/fullscreen/find cursor/event subscriptions/`update install`). |
+| 10 | Annotation listing carries `provenance`/`editable`/`removable`; removing or flattening file annotations is `YP_UNSUPPORTED` until Phase 3; batch results expose created IDs and `$ref`. |
+| 11 | Anchors return `quality`, are bound to `rev`, fail on ambiguity unless `--occurrence`, and take `--align/--offset`. Regex search deferred. |
+| 12 | `reorder --order` is an ordered, complete permutation with its own validator; `insert --after 0` = beginning; all inputs validated before writers run. |
+| 13 | `core/session.ts` (one pdf-lib document, ops mutate, single commit) replaces byte-in/byte-out for batches; batch limited to single-in/single-out ops; failure index; one undo entry live. |
+| 14 | `realpath` + device/inode identity; `--in-place`/`--overwrite` explicit; split naming refuses collisions. |
+| 15 | Typed signatures are app-scoped (canvas fonts); headless `sign` takes `--image` or `--saved`. No `@pdf-lib/fontkit` in v1. |
+| 16 | Separate pdf.js adapters (`pdfjs-node.ts` legacy build with packaged CMap/font paths; existing loader in the renderer). Headless render is a deferred product decision. |
+| 17 | MCP via the official SDK: stdout protocol-only, stderr diagnostics, `structuredContent` + `isError`, bounded image content, resources with implemented reads and expiry. |
+| 18 | CLI built by a separate `vite.cli.config.ts` (lib/node), not an electron-vite target; core/cli/mcp typechecks in `npm run typecheck`. |
+| 19 | `RunAsNode` fuse stays enabled; documented; A0 tests the signed binary; shim sanitises env before launching the GUI. |
+| 20 | `extraResources` shim with exec bit, signed + notarised; install to `~/.local/bin` first, `/usr/local/bin` if writable; refuse DMG/translocated paths; uninstall + re-validation. |
+| 21 | Windows/Linux launchers and installer work move to A4 (macOS first, per product priority). |
+| 22 | `idempotencyKey` with 10-minute replay, `--dry-run`, rich edit results, `close --discard`, `YP_APP_NOT_RUNNING` with no silent fallback. |
+| 23 | Full JSON-RPC 2.0 framing, `YP_*` codes in `error.data`, CLI exit codes, pagination for `text`/`find`/`annotations`, private artifact dir, `render`/`reload` registered. |
+| 24 | Semantic parity instead of byte identity; `YONDER_DETERMINISTIC=1` for tests; tests check values, appearances and geometry. |
+| 25 | Milestones reordered: A0 spikes first; `Session` + `documentService` in A1; MCP prototyped in A2; isolated e2e `userData`; fixture set expanded. |
