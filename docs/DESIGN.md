@@ -654,9 +654,9 @@ Claude Code setup: `claude mcp add yonder-pdf -- yonder-pdf mcp`.
 
 | # | Milestone | Exit criteria |
 |---|---|---|
-| A0 | Feasibility spikes | packaged `ELECTRON_RUN_AS_NODE` entry prints JSON and exit codes on the signed binary; pdf.js legacy build extracts text and fills a form in Node with packaged CMaps/fonts; stdio stays clean |
-| A1 | Core extraction (**done**) + `Session` + `documentService` | app unchanged (`e2e`, unit); page ops run on the session; store actions call the service |
-| A2 | Registry + validation + headless CLI (document, annotate, pages, forms, flatten, apply, schema) + MCP prototype + `docs/CLI.md` | golden tests pass; MCP `tools/list` works; schemas reviewed for agent use |
+| A0 | Feasibility spikes — **done 2026-09-22**: the signed 0.1.0 binary runs a script under `ELECTRON_RUN_AS_NODE` with clean stdout, stdin, argv and exit codes; pdf.js 6 legacy build extracts text and fills a form (verified with pdf-lib) under Node 24/26 with the package's CMaps/fonts | as stated |
+| A1 | Core extraction (**done**) + `Session` (**done**); `documentService` moves to A3 where the bridge needs it | app unchanged (`e2e`, unit); page ops run on the session |
+| A2 | Registry + validation + headless CLI (document, annotate, pages, forms, flatten, apply, schema) + MCP server + `docs/CLI.md` — **built 2026-09-22**, under Codex/Astra review (`docs/REVIEW-05-automation-code-astra.md`) | golden tests pass (`scripts/unit/cli.test.mts`); MCP `tools/list` and `tools/call` work |
 | A3 | Local API on macOS: socket, token, worker, bridge, app commands, `Install Command Line Tool…`, `extraResources` shim | socket e2e passes; shim works from a notarised build on a clean machine |
 | A4 | MCP completion (resources, images), Windows/Linux launchers, headless render decision | Claude Code highlights text in a fixture through MCP; installer tests |
 
