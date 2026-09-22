@@ -8,3 +8,5 @@ src/renderer/public/pdfjs/
 .env
 .env.*
 e2e-out/
+.playwright-mcp/
+*.tsbuildinfo

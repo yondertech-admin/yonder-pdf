@@ -83,14 +83,17 @@ export interface OpResult {
   map: PageMap
 }
 
-async function load(bytes: Uint8Array): Promise<PDFDocument> {
+export async function load(bytes: Uint8Array): Promise<PDFDocument> {
   return PDFDocument.load(bytes, { updateMetadata: false })
 }
 
-const save = (doc: PDFDocument): Promise<Uint8Array> => doc.save({ useObjectStreams: false, addDefaultPage: false })
+export const save = (doc: PDFDocument): Promise<Uint8Array> => doc.save({ useObjectStreams: false, addDefaultPage: false })
 
-export async function rotatePages(bytes: Uint8Array, indices: number[], delta: 90 | -90 | 180): Promise<OpResult> {
-  const doc = await load(bytes)
+// ---------------------------------------------------------------------------
+// In-place operations on an already loaded PDFDocument (used by Session so a
+// batch loads and saves once). Each returns the page-index remap.
+
+export function rotatePagesIn(doc: PDFDocument, indices: number[], delta: 90 | -90 | 180): PageMap {
   const pages = doc.getPages()
   for (const i of indices) {
     const p = pages[i]
@@ -98,11 +101,10 @@ export async function rotatePages(bytes: Uint8Array, indices: number[], delta: 9
     const current = p.getRotation().angle
     p.setRotation(degrees((((current + delta) % 360) + 360) % 360))
   }
-  return { bytes: await save(doc), map: (i) => i }
+  return (i) => i
 }
 
-export async function deletePages(bytes: Uint8Array, indices: number[]): Promise<OpResult> {
-  const doc = await load(bytes)
+export function deletePagesIn(doc: PDFDocument, indices: number[]): PageMap {
   const set = new Set(indices)
   if (set.size >= doc.getPageCount()) throw new Error('A document must keep at least one page')
   const deletedAnnots = annotRefsOf(doc, [...set])
@@ -114,38 +116,69 @@ export async function deletePages(bytes: Uint8Array, indices: number[]): Promise
   const newIndex: Array<number | null> = []
   let n = 0
   for (let i = 0; i < total; i++) newIndex.push(set.has(i) ? null : n++)
-  return { bytes: await save(doc), map: (i) => newIndex[i] ?? null }
+  return (i) => newIndex[i] ?? null
 }
 
 /** `order` lists old indices in their new positions. */
-export async function reorderPages(bytes: Uint8Array, order: number[]): Promise<OpResult> {
-  const doc = await load(bytes)
+export function reorderPagesIn(doc: PDFDocument, order: number[]): PageMap {
   materializeInherited(doc)
   const pages = doc.getPages()
-  if (order.length !== pages.length) throw new Error('Invalid page order')
+  if (order.length !== pages.length || new Set(order).size !== pages.length || order.some((i) => !(i >= 0 && i < pages.length))) throw new Error('Invalid page order')
   const refs = order.map((i) => pages[i])
   for (let i = pages.length - 1; i >= 0; i--) doc.removePage(i)
   for (const p of refs) doc.addPage(p)
   const inverse = new Map<number, number>()
   order.forEach((old, pos) => inverse.set(old, pos))
-  return { bytes: await save(doc), map: (i) => inverse.get(i) ?? null }
+  return (i) => inverse.get(i) ?? null
 }
 
-export async function insertBlankPage(bytes: Uint8Array, at: number, size?: [number, number]): Promise<OpResult> {
-  const doc = await load(bytes)
+export function insertBlankPageIn(doc: PDFDocument, at: number, size?: [number, number]): PageMap {
   const ref = doc.getPage(Math.min(Math.max(at - 1, 0), doc.getPageCount() - 1))
   const { width, height } = ref.getSize()
   doc.insertPage(at, size ?? [width, height])
-  return { bytes: await save(doc), map: (i) => (i >= at ? i + 1 : i) }
+  return (i) => (i >= at ? i + 1 : i)
 }
 
-export async function insertFromPdf(bytes: Uint8Array, source: Uint8Array, at: number): Promise<OpResult & { inserted: number }> {
-  const doc = await load(bytes)
+export async function insertFromPdfIn(doc: PDFDocument, source: Uint8Array, at: number): Promise<{ map: PageMap; inserted: number }> {
   const src = await load(source)
   const copied = await doc.copyPages(src, src.getPageIndices())
   copied.forEach((p, k) => doc.insertPage(at + k, p))
   const n = copied.length
-  return { bytes: await save(doc), map: (i) => (i >= at ? i + n : i), inserted: n }
+  return { map: (i) => (i >= at ? i + n : i), inserted: n }
+}
+
+// ---------------------------------------------------------------------------
+// Byte-in / byte-out wrappers (the app's undo history is byte-based).
+
+export async function rotatePages(bytes: Uint8Array, indices: number[], delta: 90 | -90 | 180): Promise<OpResult> {
+  const doc = await load(bytes)
+  const map = rotatePagesIn(doc, indices, delta)
+  return { bytes: await save(doc), map }
+}
+
+export async function deletePages(bytes: Uint8Array, indices: number[]): Promise<OpResult> {
+  const doc = await load(bytes)
+  const map = deletePagesIn(doc, indices)
+  return { bytes: await save(doc), map }
+}
+
+/** `order` lists old indices in their new positions. */
+export async function reorderPages(bytes: Uint8Array, order: number[]): Promise<OpResult> {
+  const doc = await load(bytes)
+  const map = reorderPagesIn(doc, order)
+  return { bytes: await save(doc), map }
+}
+
+export async function insertBlankPage(bytes: Uint8Array, at: number, size?: [number, number]): Promise<OpResult> {
+  const doc = await load(bytes)
+  const map = insertBlankPageIn(doc, at, size)
+  return { bytes: await save(doc), map }
+}
+
+export async function insertFromPdf(bytes: Uint8Array, source: Uint8Array, at: number): Promise<OpResult & { inserted: number }> {
+  const doc = await load(bytes)
+  const { map, inserted } = await insertFromPdfIn(doc, source, at)
+  return { bytes: await save(doc), map, inserted }
 }
 
 export async function extractPages(bytes: Uint8Array, indices: number[]): Promise<Uint8Array> {

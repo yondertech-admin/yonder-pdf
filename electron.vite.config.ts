@@ -25,7 +25,7 @@ function devCsp(): Plugin {
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
-    resolve: { alias: { '@shared': resolve('src/shared'), '@core': resolve('src/core') } }
+    resolve: { alias: { '@shared': resolve('src/shared'), '@core': resolve('src/core'), '@node': resolve('src/node') } }
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

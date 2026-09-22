@@ -98,6 +98,11 @@ export type Annotation =
 
 export type AnnotationKind = Annotation['kind']
 
+/** Omit that distributes over the Annotation union (a plain Omit collapses it to the common keys). */
+export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+/** An annotation before it gets its id and timestamp. */
+export type NewAnnotation = DistributiveOmit<Annotation, 'id' | 'createdAt'>
+
 export type Tool =
   | 'select'
   | 'hand'

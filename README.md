@@ -13,6 +13,7 @@ Free, open-source PDF viewer and editor for macOS, Windows and Linux. View, anno
 - **Pages**: rotate, reorder (drag thumbnails), delete, insert blank, insert from another PDF, extract, split, merge
 - **Output**: save / save as (annotations are real PDF annotations with appearance streams, readable by Acrobat, Preview, Chrome…), flatten, export pages as PNG, print
 - **App**: native menu and shortcuts, Finder / Explorer file association, drag & drop, recent files, unsaved-changes guard, updates from GitHub Releases
+- **Automation**: every feature is also a command — `yonder-pdf` on the command line and an MCP server for AI agents such as Claude Code (see below)
 
 ## Install
 
@@ -42,6 +43,30 @@ Ad-free contributor build: `YONDER_ADS=off npm run build`.
 
 Diagnostics while developing (unpackaged only): `YONDER_DEBUG=1` mirrors renderer console output to the terminal; `YONDER_SCREENSHOT=/tmp/shot.png` captures the window after four seconds and quits.
 
+## Command line and agents
+
+The same engine runs headlessly. Every command prints JSON; pages are 1-based, coordinates are PDF points (origin bottom-left), colours are hex. Placement commands accept a **text anchor** so an agent never needs coordinates:
+
+```bash
+npm run build:cli                                   # → out/cli (packaged builds ship it as `yonder-pdf`)
+node out/cli/index.mjs info --in report.pdf
+node out/cli/index.mjs find "Total due" --in invoice.pdf
+node out/cli/index.mjs annotate.highlight --in invoice.pdf --out marked.pdf --text "Total due"
+node out/cli/index.mjs annotate.text --in a.pdf --out b.pdf --text "Signature:" --align right --content "Ada Lovelace"
+node out/cli/index.mjs forms.fill --in form.pdf --out filled.pdf --set name="Ada" --set agree=true
+node out/cli/index.mjs pages.rotate --in a.pdf --in-place --pages 2-3 --by 90
+node out/cli/index.mjs apply --in a.pdf --out b.pdf --ops '[{"command":"annotate.highlight","params":{"text":"Total"}},{"command":"pages.delete","params":{"pages":"4"}}]'
+node out/cli/index.mjs schema --markdown            # the full reference, also in docs/CLI.md
+```
+
+Model Context Protocol: `node out/cli/index.mjs mcp` serves every command as a tool over stdio. For Claude Code:
+
+```bash
+claude mcp add yonder-pdf -- node /path/to/yonder-pdf/out/cli/index.mjs mcp
+```
+
+Headless today: inspect, search, annotate, sign with an image, fill and flatten forms, page operations, batch `apply`. Driving the running app (live documents, rendering, printing, typed signatures) is the next milestone — see `docs/DESIGN.md` §14.
+
 ## Architecture
 
 Electron 44 · electron-vite · React 19 · TypeScript · pdf.js 6 (rendering, text layer, forms) · pdf-lib (writing annotations, page operations) · Zustand.
@@ -52,8 +77,11 @@ Read [docs/DESIGN.md](docs/DESIGN.md) for the full design, the security model (s
 src/main       Electron main: window, menu, IPC, settings, printing, updater
 src/preload    contextBridge API (window.yonder)
 src/shared     IPC contract + shared types
-src/renderer   React app: store/, pdf/ (pdf.js adapter, writer, page ops, search, render), components/, ads/
-scripts/e2e    CDP-based end-to-end scenarios
+src/core       Headless engine (no DOM): annotation model + writer, page ops, Session, text/search, forms, command registry
+src/node       Node adapters: pdf.js legacy build, file I/O, headless runner
+src/cli        `yonder-pdf` command line · src/mcp  MCP server (stdio)
+src/renderer   React app: store/, pdf/ (pdf.js adapter, render, signature capture), components/, ads/
+scripts/e2e    CDP-based end-to-end scenarios · scripts/unit  Node tests (page ops, CLI, MCP)
 ```
 
 ## Privacy
