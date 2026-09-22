@@ -1,6 +1,7 @@
 // Raster image inputs for image / stamp / signature commands: PNG and JPEG
 // only (what pdf-lib embeds). Dimensions come from the file headers so no
 // decoder is needed in the headless path.
+import { PDFDocument } from 'pdf-lib'
 import { YonderError } from './errors'
 
 export interface ImageInfo {
@@ -45,6 +46,17 @@ function parseHeader(bytes: Uint8Array): ImageInfo {
     }
   }
   throw new YonderError('YP_INVALID_INPUT', 'Image must be a PNG or JPEG file')
+}
+
+/** Decode with pdf-lib now, so a corrupt file fails in its own operation instead of at commit (REVIEW-06 #7). */
+export async function assertEmbeddable(bytes: Uint8Array, info: ImageInfo): Promise<void> {
+  try {
+    const probe = await PDFDocument.create()
+    if (info.mime === 'image/jpeg') await probe.embedJpg(bytes)
+    else await probe.embedPng(bytes)
+  } catch (err) {
+    throw new YonderError('YP_INVALID_INPUT', `Image could not be decoded: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 export function toDataUrl(bytes: Uint8Array, mime: ImageInfo['mime']): string {

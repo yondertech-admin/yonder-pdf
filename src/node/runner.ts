@@ -7,10 +7,10 @@ import { promises as fs } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { get, type Command, type Params } from '@core/commands/index'
 import { InputDoc, sha256Hex, type CommandContext } from '@core/commands/context'
-import { YonderError } from '@core/errors'
+import { toYonderError, YonderError } from '@core/errors'
 import { validate } from '@core/schema'
 import { readSavedSignatures } from './appdata'
-import { canonical, exists, identity, writeAtomic } from './fs'
+import { canonical, exists, identity, withWriteLock, writeAtomic } from './fs'
 import { loadPdfNode, NeedsPassword } from './pdfjs'
 
 export interface RunOptions {
@@ -111,14 +111,20 @@ function harvest(result: unknown, created: string[], warnings: string[]): void {
   if (Array.isArray(r.ops)) harvest(r.ops, created, warnings)
 }
 
+/**
+ * Publish one destination under its write lock. Replacing the input re-hashes
+ * it inside the lock, immediately before the rename, so a concurrent writer
+ * cannot slip between check and publication (REVIEW-06 #1).
+ */
 async function publish(path: string, bytes: Uint8Array, opts: RunOptions, inPath?: string, inSha?: string): Promise<void> {
   const replacingInput = inPath !== undefined && path === inPath
-  if (replacingInput && inSha) {
-    // Re-verify the input right before replacing it: another writer may have changed it meanwhile.
-    const nowSha = await sha256Hex(await readBounded(inPath, 'pdf'))
-    if (nowSha !== inSha) throw new YonderError('YP_REV_MISMATCH', `${inPath} changed while the command was running; nothing was written`, 'Re-run the command.')
-  }
-  await writeAtomic(path, bytes, { exclusive: !opts.overwrite && !replacingInput })
+  await withWriteLock(path, async () => {
+    if (replacingInput && inSha) {
+      const nowSha = await sha256Hex(await readBounded(inPath, 'pdf'))
+      if (nowSha !== inSha) throw new YonderError('YP_REV_MISMATCH', `${inPath} changed while the command was running; nothing was written`, 'Re-run the command.')
+    }
+    await writeAtomic(path, bytes, { exclusive: !opts.overwrite && !replacingInput })
+  })
 }
 
 export async function runHeadless(name: string, params: Params, opts: RunOptions): Promise<RunResult> {
@@ -132,31 +138,38 @@ export async function runHeadless(name: string, params: Params, opts: RunOptions
   let doc: InputDoc | undefined
   let inPath: string | undefined
   let inSha: string | undefined
-  if (cmd.needsDoc) {
-    if (!opts.in) throw new YonderError('YP_USAGE', `${cmd.name} needs --in <file>`)
-    inPath = await canonical(opts.in)
-    const bytes = await readBounded(inPath, 'pdf')
-    inSha = await sha256Hex(bytes)
-    if (opts.expectSha256 && opts.expectSha256.toLowerCase() !== inSha) throw new YonderError('YP_REV_MISMATCH', `${opts.in} has changed (sha256 ${inSha})`, 'Re-read the document and retry with the current --expect-sha256.')
-    doc = new InputDoc(ctx0.loadPdfjs, bytes, opts.password, { author: opts.author, now: ctx0.now() })
-    if (cmd.produces !== 'none') {
-      // Guards the UI enforces before any rewrite (§12 #17, §15 #8), applied centrally.
-      await doc.assertEditable()
-      if (cmd.produces === 'document' && (await doc.hasSignatures()) && !opts.acknowledgeSignatureInvalidation) {
-        throw new YonderError('YP_SIGNATURES_PRESENT', 'The document contains signature fields; rewriting it invalidates any existing digital signatures', 'Pass --acknowledge-signature-invalidation to proceed, or write to a separate --out and keep the original.')
+  try {
+    if (cmd.needsDoc) {
+      if (!opts.in) throw new YonderError('YP_USAGE', `${cmd.name} needs --in <file>`)
+      inPath = await canonical(opts.in)
+      const bytes = await readBounded(inPath, 'pdf')
+      inSha = await sha256Hex(bytes)
+      if (opts.expectSha256 && opts.expectSha256.toLowerCase() !== inSha) throw new YonderError('YP_REV_MISMATCH', `${opts.in} has changed (sha256 ${inSha})`, 'Re-read the document and retry with the current --expect-sha256.')
+      doc = new InputDoc(ctx0.loadPdfjs, bytes, opts.password, { author: opts.author, now: ctx0.now() })
+      if (cmd.produces !== 'none') {
+        // Guards the UI enforces before any rewrite (§12 #17, §15 #8), applied centrally.
+        await doc.assertEditable()
+        if (cmd.produces === 'document' && (await doc.hasSignatures()) && !opts.acknowledgeSignatureInvalidation) {
+          throw new YonderError('YP_SIGNATURES_PRESENT', 'The document contains signature fields; rewriting it invalidates any existing digital signatures', 'Pass --acknowledge-signature-invalidation to proceed, or write to a separate --out and keep the original.')
+        }
       }
     }
-  }
-  const plan = await planOutput(cmd, opts, inPath)
-  const ctx = makeContext(opts, doc)
-  try {
+    const plan = await planOutput(cmd, opts, inPath)
+    const ctx = makeContext(opts, doc)
     const outcome = await cmd.run(ctx, params)
     const res: RunResult = { ok: true, command: cmd.name, created: [], warnings: [], outputs: [], result: outcome.result }
     harvest(outcome.result, res.created, res.warnings)
     if (doc) for (const w of doc.warnings) if (!res.warnings.includes(w)) res.warnings.push(w)
     if (inPath && inSha) res.target = { file: inPath, sha256: inSha }
     if (cmd.produces === 'document' && doc) {
-      const bytes = await doc.commit()
+      let bytes: Uint8Array
+      try {
+        bytes = await doc.commit()
+      } catch (err) {
+        const e = toYonderError(err)
+        e.details = { ...(typeof e.details === 'object' && e.details ? e.details : {}), stage: 'commit', hint: 'An earlier operation produced content that could not be serialised; nothing was written.' }
+        throw e
+      }
       res.revBefore = 0
       res.revAfter = doc.rev
       res.outputSha256 = await sha256Hex(bytes)
@@ -175,20 +188,29 @@ export async function runHeadless(name: string, params: Params, opts: RunOptions
         res.outputs.push({ path: plan.out!, sha256: res.outputSha256 })
       }
     } else if (cmd.produces === 'files') {
-      const dir = plan.outDir!
-      const stem = inPath ? basename(inPath, extname(inPath)) : 'output'
       const files = outcome.outputs ?? []
-      const paths = files.map((o) => join(dir, `${stem}-${o.name}`))
-      if (!opts.overwrite) for (const p of paths) if (await exists(p)) throw new YonderError('YP_OUTPUT_EXISTS', `${p} already exists`, 'Pass --overwrite to replace existing parts.')
-      if (opts.dryRun) res.dryRun = true
-      else {
-        await fs.mkdir(dir, { recursive: true })
+      const stem = inPath ? basename(inPath, extname(inPath)) : 'output'
+      if (opts.dryRun) {
+        res.dryRun = true
+        res.result = { ...res.result, files: files.map((o) => join(plan.outDir!, `${stem}-${o.name}`)) }
+      } else {
+        await fs.mkdir(plan.outDir!, { recursive: true })
+        const dir = await canonical(plan.outDir!)
+        const paths = files.map((o) => join(dir, `${stem}-${o.name}`))
+        if (!opts.overwrite) for (const p of paths) if (await exists(p)) throw new YonderError('YP_OUTPUT_EXISTS', `${p} already exists`, 'Pass --overwrite to replace existing parts.')
         for (let i = 0; i < paths.length; i++) {
-          await publish(paths[i], files[i].bytes, opts)
+          try {
+            await publish(paths[i], files[i].bytes, opts)
+          } catch (err) {
+            // Report what was already written so an agent can see the partial state (REVIEW-06 #6).
+            const e = toYonderError(err)
+            e.details = { ...(typeof e.details === 'object' && e.details ? e.details : {}), written: res.outputs, failedPath: paths[i] }
+            throw e
+          }
           res.outputs.push({ path: paths[i], sha256: await sha256Hex(files[i].bytes) })
         }
+        res.result = { ...res.result, files: paths }
       }
-      res.result = { ...res.result, files: paths }
     }
     return res
   } finally {

@@ -118,7 +118,7 @@ export const extract: Command = {
   async run(ctx, p): Promise<Outcome> {
     const doc = requireDoc(ctx)
     const idx = parsePages(p.pages as string, await doc.pageCount())
-    const bytes = await ops.extractPages(await doc.commit(), idx)
+    const bytes = await ops.extractPages(await doc.commit(), idx, ctx.deterministic ? ctx.now() : undefined)
     return { result: { pages: idx.map((i) => i + 1), warnings: ['forms-dropped', 'outline-dropped'] }, outputs: [{ name: 'extract.pdf', bytes }] }
   }
 }
@@ -142,7 +142,7 @@ export const split: Command = {
       ranges = []
       for (let i = 0; i < n; i += every) ranges.push(Array.from({ length: Math.min(every, n - i) }, (_, k) => i + k))
     } else throw new YonderError('YP_USAGE', 'Give --every N or --ranges "1-2;3-5"')
-    const parts = await ops.splitPdf(await doc.commit(), ranges)
+    const parts = await ops.splitPdf(await doc.commit(), ranges, ctx.deterministic ? ctx.now() : undefined)
     const pad = String(parts.length).length
     return { result: { parts: ranges.map((r, i) => ({ index: i + 1, pages: r.map((x) => x + 1) })), warnings: ['forms-dropped', 'outline-dropped'] }, outputs: parts.map((bytes, i) => ({ name: `${String(i + 1).padStart(pad, '0')}.pdf`, bytes })) }
   }
@@ -161,7 +161,7 @@ export const merge: Command = {
     const files = p.files as string[]
     const sources: Uint8Array[] = []
     for (const f of files) sources.push(await ctx.readFile(f, 'pdf'))
-    const bytes = await ops.mergePdfs(sources)
+    const bytes = await ops.mergePdfs(sources, ctx.deterministic ? ctx.now() : undefined)
     return { result: { merged: files.length, warnings: ['forms-dropped', 'outline-dropped'] }, outputs: [{ name: 'merged.pdf', bytes }] }
   }
 }

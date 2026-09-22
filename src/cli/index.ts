@@ -192,15 +192,27 @@ function print(value: unknown, compact: boolean): void {
 }
 
 export async function main(argv: string[]): Promise<number> {
+  try {
+    return await run(argv)
+  } catch (err) {
+    const e = toYonderError(err)
+    process.stderr.write(JSON.stringify({ error: e.toJSON() }) + '\n')
+    return exitCodeFor(e.code)
+  }
+}
+
+async function run(argv: string[]): Promise<number> {
   const parsed = parseArgv(argv)
-  const compact = globalBool('json', parsed.options.json)
+  // Every global boolean is validated up front, before any early return (REVIEW-06 #10).
+  for (const [k, v] of Object.entries(GLOBAL)) if (v.type === 'boolean' && parsed.options[k] !== undefined) parsed.options[k] = globalBool(k, parsed.options[k])
+  const compact = parsed.options.json === true
   if (parsed.options.version === true && !parsed.command) {
     print({ version: __YONDER_VERSION__, apiVersion: describe().apiVersion }, compact)
     return 0
   }
-  if (!parsed.command || (parsed.command === undefined && parsed.options.help)) {
+  if (!parsed.command) {
     process.stdout.write(usage() + '\n')
-    return parsed.options.help ? 0 : 2
+    return parsed.options.help === true ? 0 : 2
   }
   if (parsed.command === 'version' || parsed.options.version === true) {
     print({ version: __YONDER_VERSION__, apiVersion: describe().apiVersion }, compact)
@@ -231,7 +243,7 @@ export async function main(argv: string[]): Promise<number> {
     process.stderr.write(JSON.stringify({ error: { code: 'YP_USAGE', message: `Unknown command "${parsed.command}"`, hint: 'Run yonder-pdf --help' } }) + '\n')
     return 2
   }
-  if (parsed.options.help) {
+  if (parsed.options.help === true) {
     process.stdout.write(commandHelp(cmd) + '\n')
     return 0
   }
@@ -247,11 +259,11 @@ export async function main(argv: string[]): Promise<number> {
       in: str(parsed.options.in),
       out: str(parsed.options.out),
       outDir: str(parsed.options['out-dir']),
-      inPlace: globalBool('in-place', parsed.options['in-place']),
-      overwrite: globalBool('overwrite', parsed.options.overwrite),
-      dryRun: globalBool('dry-run', parsed.options['dry-run']),
-      deterministic: globalBool('deterministic', parsed.options.deterministic),
-      acknowledgeSignatureInvalidation: globalBool('acknowledge-signature-invalidation', parsed.options['acknowledge-signature-invalidation']),
+      inPlace: parsed.options['in-place'] === true,
+      overwrite: parsed.options.overwrite === true,
+      dryRun: parsed.options['dry-run'] === true,
+      deterministic: parsed.options.deterministic === true,
+      acknowledgeSignatureInvalidation: parsed.options['acknowledge-signature-invalidation'] === true,
       author: str(parsed.options.author),
       expectSha256: str(parsed.options['expect-sha256']),
       password

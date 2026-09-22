@@ -181,16 +181,26 @@ export async function insertFromPdf(bytes: Uint8Array, source: Uint8Array, at: n
   return { bytes: await save(doc), map, inserted }
 }
 
-export async function extractPages(bytes: Uint8Array, indices: number[]): Promise<Uint8Array> {
-  const src = await load(bytes)
+/** A fresh document; with `now`, its dates are fixed (deterministic builds). */
+async function create(now?: number): Promise<PDFDocument> {
   const out = await PDFDocument.create()
+  if (now !== undefined) {
+    out.setCreationDate(new Date(now))
+    out.setModificationDate(new Date(now))
+  }
+  return out
+}
+
+export async function extractPages(bytes: Uint8Array, indices: number[], now?: number): Promise<Uint8Array> {
+  const src = await load(bytes)
+  const out = await create(now)
   const copied = await out.copyPages(src, indices)
   copied.forEach((p) => out.addPage(p))
   return save(out)
 }
 
-export async function mergePdfs(sources: Uint8Array[]): Promise<Uint8Array> {
-  const out = await PDFDocument.create()
+export async function mergePdfs(sources: Uint8Array[], now?: number): Promise<Uint8Array> {
+  const out = await create(now)
   for (const s of sources) {
     const doc = await load(s)
     const copied = await out.copyPages(doc, doc.getPageIndices())
@@ -200,11 +210,11 @@ export async function mergePdfs(sources: Uint8Array[]): Promise<Uint8Array> {
 }
 
 /** Split into chunks of `every` pages (or explicit ranges). */
-export async function splitPdf(bytes: Uint8Array, ranges: number[][]): Promise<Uint8Array[]> {
+export async function splitPdf(bytes: Uint8Array, ranges: number[][], now?: number): Promise<Uint8Array[]> {
   const src = await load(bytes)
   const parts: Uint8Array[] = []
   for (const r of ranges) {
-    const out = await PDFDocument.create()
+    const out = await create(now)
     const copied = await out.copyPages(src, r)
     copied.forEach((p) => out.addPage(p))
     parts.push(await save(out))

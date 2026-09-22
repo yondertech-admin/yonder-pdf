@@ -1,15 +1,22 @@
 #!/bin/sh
 # Yonder PDF command line (macOS / Linux). Runs the CLI bundle with the app's
-# own runtime, so nothing else needs to be installed. Installed into PATH by
-# "Yonder PDF ▸ Install Command Line Tool…" as a symlink to this file.
-here="$(cd "$(dirname "$0")" && pwd -P)"                     # …/Contents/Resources/bin
+# own runtime, so nothing else needs to be installed. "Yonder PDF ▸ Help ▸
+# Install Command Line Tool…" symlinks this file into PATH; resolve that chain
+# back to the bundle first.
+self="$0"
+while [ -L "$self" ]; do
+  dir="$(cd "$(dirname "$self")" && pwd -P)"
+  self="$(readlink "$self")"
+  case "$self" in /*) ;; *) self="$dir/$self" ;; esac
+done
+here="$(cd "$(dirname "$self")" && pwd -P)"                  # …/Contents/Resources/bin
 res="$(dirname "$here")"                                     # …/Contents/Resources
 case "$(uname -s)" in
   Darwin) bin="$(dirname "$(dirname "$res")")/Contents/MacOS/Yonder PDF" ;;
-  *)      bin="$(dirname "$res")/yonder-pdf-bin" ;;          # Linux: resources/ sits next to the binary
+  *)      bin="$(dirname "$res")/yonder-pdf" ;;              # Linux: resources/ sits next to the executable
 esac
 if [ ! -x "$bin" ]; then
-  echo '{"error":{"code":"YP_INTERNAL","message":"Yonder PDF runtime not found next to the CLI"}}' >&2
+  echo '{"error":{"code":"YP_INTERNAL","message":"Yonder PDF runtime not found next to the CLI","hint":"Reinstall the command line tool from the app'"'"'s Help menu"}}' >&2
   exit 1
 fi
 # The GUI's Node/Electron switches must not leak into the CLI process.

@@ -65,8 +65,21 @@ export async function hasSignatureFields(pdf: PDFDocumentProxy): Promise<boolean
   return (await allFieldObjects(pdf)).some((f) => f.type === 'signature')
 }
 
+/** pdf.js field objects carry only the first selected value of a multi-select list box; the widget annotation has all of them. */
+async function multiValues(pdf: PDFDocumentProxy, fields: RawField[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>()
+  const pages = new Set(fields.filter((f) => f.multipleSelection).map((f) => f.page))
+  for (const pageIndex of pages) {
+    const page = await pdf.getPage(pageIndex + 1)
+    const annots = (await page.getAnnotations()) as Array<{ id: string; fieldValue?: unknown }>
+    for (const a of annots) if (Array.isArray(a.fieldValue)) out.set(a.id, a.fieldValue.map(String))
+  }
+  return out
+}
+
 export async function listFields(pdf: PDFDocumentProxy): Promise<FieldInfo[]> {
   const fields = await rawFields(pdf)
+  const multi = await multiValues(pdf, fields)
   return fields.map((f) => {
     const [x0, y0, x1, y1] = f.rect as number[]
     const ev = Array.isArray(f.exportValues) ? f.exportValues[0] : f.exportValues
@@ -74,7 +87,7 @@ export async function listFields(pdf: PDFDocumentProxy): Promise<FieldInfo[]> {
       id: f.id,
       name: f.name,
       type: mapType(f.type),
-      value: f.value,
+      value: f.multipleSelection && multi.has(f.id) ? multi.get(f.id) : f.value,
       ...(f.defaultValue !== undefined ? { defaultValue: f.defaultValue } : {}),
       ...(ev !== undefined ? { exportValue: ev } : {}),
       ...(f.items ? { options: f.items.map((it) => ({ value: it.exportValue, label: it.displayValue })) } : {}),

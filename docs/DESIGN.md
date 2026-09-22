@@ -722,3 +722,20 @@ Full findings: `docs/REVIEW-05-automation-code-astra.md` (22 items, milestone A2
 | 20 | `--version` works, surplus positionals are rejected, help no longer mentions `--text-anchor`, markup `quads` accept the array from `find`, `apply --ops-file` reads a JSON file. |
 | 21 | Added `signatures.list` and `annotate.sign/initial --saved <id>` (read-only access to the app's settings file), `forms.fill --values-file`, `status`. Image commands take `--image`. Saved-signature add/remove, `--remove-white`, typed signatures and rendering stay app-scoped (A3). README wording qualified. |
 | 22 | New fixture `test-fixtures/forms.pdf` (radio, read-only, multi-select list, combo, checkbox, bare `/Sig` field) and tests for the signature guard, rotated-page sizing, flatten ordering, boolean options, author, bad `$ref` attribution, surplus arguments, array quads, and on-disk absence after dry runs and failures. Encrypted fixtures still to be added (no generator in the toolchain yet). |
+
+Second pass (`docs/REVIEW-06-automation-code-astra-pass2.md`, 12 items, same day):
+
+| # | Decision |
+|---|---|
+| 1 | Publication runs under a per-destination lock file (`O_EXCL`, 5 s wait, 60 s stale reclaim); replacing the input re-hashes it inside the lock right before the rename. |
+| 2 | The shim resolves its symlink chain before locating the bundle; the Linux runtime name matches electron-builder's executable (`yonder-pdf`). |
+| 3 | Multi-select list boxes read every selected value from the widget annotation (`fieldValue`), not pdf.js's first-value field object. |
+| 4 | Anchored `--align on` images keep their *display* aspect on rotated pages (ratio swapped for 90°/270°). |
+| 5 | Every failure path after the document is loaded runs through one `try/finally` that destroys it (guards and output planning included). |
+| 6 | An exclusive-link `EEXIST` maps to `YP_OUTPUT_EXISTS`; multi-file failures report `written[]` and `failedPath` in the error details. |
+| 7 | Images are decoded with pdf-lib in their own operation (`assertEmbeddable`), so a corrupt file fails with `failedIndex`; commit failures carry `stage: 'commit'`. |
+| 8 | Extract/merge/split take an injected clock for the new document's dates; pdf.js's form serialisation keeps its own `/ModDate` (documented). |
+| 9 | Split output paths are canonicalised after the directory is created. |
+| 10 | Global booleans are validated once, up front, inside the structured error handler; `--help=false` is false. |
+| 11 | `npm run test:unit` builds the CLI first. |
+| 12 | Tests added: multi-select readback, 2:1 image on a rotated page (at + anchored), corrupt image attribution, deterministic extract dates, meta booleans, canonical split paths, MCP string-valued boolean rejection. Still open: publication race tests, installed-symlink invocation, rendered-content checks for flattening. |

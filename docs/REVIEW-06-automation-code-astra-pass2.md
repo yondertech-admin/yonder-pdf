@@ -1,0 +1,25 @@
+1. **P1 — #4 remains unsafe: concurrent in-place writes can lose edits.** [src/node/runner.ts:118](/Users/aeedpuganti/Code/yonderPDF/src/node/runner.ts:118), [src/node/fs.ts:22](/Users/aeedpuganti/Code/yonderPDF/src/node/fs.ts:22): hashing happens **before** writing/fsyncing the temporary file. Two writers can pass the same hash check, then both rename successfully. Publication needs writer coordination and a final guarded recheck.
+
+2. **P1 — New: installed CLI/MCP launcher is broken.** [resources/bin/yonder-pdf:5](/Users/aeedpuganti/Code/yonderPDF/resources/bin/yonder-pdf:5): `dirname "$0"` resolves the installed `~/.local/bin/yonder-pdf` location; `pwd -P` does not follow the executable symlink. Runtime lookup consequently points outside the app. Resolve the symlink chain first. Line 9 also assumes `yonder-pdf-bin`, whereas the Linux packaging configuration produces `yonder-pdf`.
+
+3. **P2 — #10 unresolved: multi-select reads silently lose selections.** [src/core/forms.ts:77](/Users/aeedpuganti/Code/yonderPDF/src/core/forms.ts:77): listing still uses pdf.js’s first-value-only `getFieldObjects().value`. Confirmed: filling `["cheese","peppers"]` then listing reports `"cheese"`. An agent’s read-modify-write can erase the unreported selection.
+
+4. **P2 — #7 incomplete: anchored images still distort on rotated pages.** [src/core/commands/annotate.ts:301](/Users/aeedpuganti/Code/yonderPDF/src/core/commands/annotate.ts:301): `--align on` without explicit width bypasses the size swap; `fitAnchored()` applies the image ratio directly in unrotated user space. Confirmed: a 2:1 image on page 3 becomes a 19.8×9.9 user-space box, displayed as 1:2.
+
+5. **P2 — New: rejected edits bypass document cleanup.** [src/node/runner.ts:145](/Users/aeedpuganti/Code/yonderPDF/src/node/runner.ts:145): signature detection opens pdf.js before the `try/finally`. Signature refusal and subsequent output-planning errors—missing output, existing output, same file—never call `destroy()`. Repeated ordinary failures in the persistent MCP server leave loaded documents undisposed.
+
+6. **P2 — #4/#16 incomplete: publication failures conceal partial success.** [src/node/runner.ts:186](/Users/aeedpuganti/Code/yonderPDF/src/node/runner.ts:186), [src/node/fs.ts:30](/Users/aeedpuganti/Code/yonderPDF/src/node/fs.ts:30): if a later split destination appears after preflight, earlier parts remain written, but the error omits their paths/hashes. The exclusive-link `EEXIST` also becomes `YP_INTERNAL`, not `YP_OUTPUT_EXISTS`/exit 4. Agents cannot reliably determine what changed or retry.
+
+7. **P2 — #18 unresolved: deferred serialization errors lack operation attribution.** [src/node/runner.ts:159](/Users/aeedpuganti/Code/yonderPDF/src/node/runner.ts:159): final commit remains outside batch attribution. Confirmed with a malformed PNG that passes header inspection: its operation succeeds, then commit fails without `failedIndex` or command. Preserve attribution for deferred annotation/image work.
+
+8. **P2 — #17 incomplete: deterministic clocks miss other serialization backends.** [src/core/pageOps.ts:207](/Users/aeedpuganti/Code/yonderPDF/src/core/pageOps.ts:207): extract/merge/split create documents using wall-clock metadata; pdf.js form serialization likewise receives no injected clock. Confirmed deterministic extraction writes today’s `/ModDate`, not `2026-01-01`.
+
+9. **P3 — #16 unresolved: split output paths are not canonical.** [src/node/runner.ts:181](/Users/aeedpuganti/Code/yonderPDF/src/node/runner.ts:181): relative or symlinked `outDir` is returned unchanged in `outputs[].path`, unlike single-file outputs. Canonicalize the created directory before reporting paths.
+
+10. **P3 — #2/#20 incomplete: meta booleans bypass coercion.** [src/cli/index.ts:201](/Users/aeedpuganti/Code/yonderPDF/src/cli/index.ts:201): `--version=true` misses the strict-boolean check; `--help=false` is truthy and displays help. Invalid `--json` throws outside the structured-error catch and becomes `YP_INTERNAL`. Validate global options before early returns.
+
+11. **P2 — #22 unresolved: tests can still pass against stale bundles.** [package.json:24](/Users/aeedpuganti/Code/yonderPDF/package.json:24): `test:unit` never builds the CLI, while [scripts/unit/cli.test.mts:12](/Users/aeedpuganti/Code/yonderPDF/scripts/unit/cli.test.mts:12) executes `out/cli/index.mjs`.
+
+12. **P2 — #22: consequential regression coverage remains missing.** [scripts/unit/cli.test.mts:169](/Users/aeedpuganti/Code/yonderPDF/scripts/unit/cli.test.mts:169): add multi-select **CLI readback**, rotated non-square image appearances, synchronized publication races/partial failures, MCP string-valued IO booleans, and installed-symlink invocation without repository dependencies. Flatten tests should inspect rendered content, not merely annotation/field disappearance; menu tests should exercise typing plus modified shortcuts.
+
+Core/CLI/main typechecks passed. Findings marked confirmed used current-source in-memory probes. Disk-writing and packaged GUI tests were not run under the read-only sandbox.

@@ -2,7 +2,7 @@
 // unrotated page); every placement also accepts a text anchor (design §14.1 #4).
 import { placeRelative, resolveAnchor, type Align } from '../anchors'
 import { YonderError } from '../errors'
-import { fitWidth, imageInfo, toDataUrl } from '../images'
+import { assertEmbeddable, fitWidth, imageInfo, toDataUrl } from '../images'
 import { s, type Schema } from '../schema'
 import { NOTE_ICON_SIZE, boundsOf, type Annotation, type NewAnnotation, type Quad, type Rect } from '../types'
 import { parseColor, parseOpacity, parsePage, parsePaths, parsePoint, parsePositive, parseQuads, parseRect } from '../validate'
@@ -293,21 +293,22 @@ function imageLike(name: string, role: 'image' | 'stamp' | 'signature' | 'initia
       } else if (p.image !== undefined) {
         const bytes = await ctx.readFile(String(p.image), 'image')
         info = imageInfo(bytes)
+        await assertEmbeddable(bytes, info)
         dataUrl = toDataUrl(bytes, info.mime)
       } else throw new YErr('YP_USAGE', 'Give --image <png|jpg> or --saved <id>')
       const explicitWidth = p.width !== undefined
       const width = explicitWidth ? parsePositive(p.width as number, 'width', 5000) : defaultWidth
       const place = await placeBox(ctx, p, { size: fitWidth(info, width), explicit: explicitWidth, oriented: true }, role === 'signature' || role === 'initials' ? 'right' : 'below')
-      const rect = p.rect !== undefined ? place.rect : p.align === 'on' && !explicitWidth && place.anchor ? fitAnchored(place.rect, info) : place.rect
+      const rect = p.rect !== undefined ? place.rect : p.align === 'on' && !explicitWidth && place.anchor ? fitAnchored(place.rect, info, await requireDoc(ctx).pageRotate(place.page)) : place.rect
       const a = await add(ctx, { kind: 'image', page: place.page, rect, dataUrl, role, rotate: await requireDoc(ctx).pageRotate(place.page) })
       return created(a, { image: { width: info.width, height: info.height, mime: info.mime }, ...(place.anchor ? { anchor: place.anchor } : {}) })
     }
   }
 }
 
-/** When placed "on" an anchor without a width, keep the image's aspect inside the anchor box. */
-function fitAnchored(box: Rect, info: { width: number; height: number }): Rect {
-  const ratio = info.height / info.width
+/** When placed "on" an anchor without a width, keep the image's *display* aspect inside the anchor box (swapped on 90°/270° pages). */
+function fitAnchored(box: Rect, info: { width: number; height: number }, rotate: number): Rect {
+  const ratio = rotate % 180 !== 0 ? info.width / info.height : info.height / info.width
   let w = box.width
   let h = w * ratio
   if (h > box.height) {

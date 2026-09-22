@@ -201,6 +201,35 @@ console.log('CLI: review-05 paths — forms fixture, guards, rotation, ordering,
   check(strokeW.code === 0 && strokeW.out.result.bounds.width < 70, 'stroke --width does not change anchored rect sizing')
 }
 
+console.log('CLI: review-06 paths')
+{
+  const ms = cli('forms.fill', '--in', FORMS, '--out', join(T, 'ms.pdf'), '--acknowledge-signature-invalidation', '--set', 'toppings=olives', '--set', 'toppings=peppers')
+  const back = cli('forms.fields', '--in', join(T, 'ms.pdf'))
+  const toppings = back.out.result.fields.find((f: any) => f.name === 'toppings')
+  check(ms.code === 0 && Array.isArray(toppings.value) && toppings.value.sort().join() === 'olives,peppers', 'multi-select list box reads back every selected value')
+  const wide = join(T, 'wide.png')
+  // 4×2 transparent PNG (2:1)
+  writeFileSync(wide, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1jAAAAEUlEQVQIW2NkYGD4z8DAwAAABAABGqvLQwAAAABJRU5ErkJggg==', 'base64'))
+  const ri = cli('annotate.image', '--in', FIX, '--out', join(T, 'ri.pdf'), '--page', '3', '--at', '100,100', '--image', wide)
+  check(ri.code === 0 && ri.out.result.bounds.width === 100 && ri.out.result.bounds.height === 200, 'a 2:1 image on a /Rotate 90 page stores a 1:2 user-space box (displays 2:1)')
+  const ra = cli('annotate.image', '--in', FIX, '--out', join(T, 'ra.pdf'), '--page', '3', '--text', 'Signature box', '--align', 'on', '--image', wide)
+  check(ra.code === 0 && ra.out.result.bounds.height > ra.out.result.bounds.width, 'anchored "on" image keeps display aspect on a rotated page')
+  const bad = join(T, 'bad.png')
+  writeFileSync(bad, Buffer.concat([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1j', 'base64'), Buffer.from('garbage-garbage-garbage')]))
+  const corrupt = cli('apply', '--in', FIX, '--out', join(T, 'corrupt.pdf'), '--ops', JSON.stringify([{ command: 'annotate.note', params: { page: 1, at: '1,1', content: 'x' } }, { command: 'annotate.image', params: { page: 1, at: '10,10', image: bad } }]))
+  check(corrupt.code === 2 && corrupt.err?.error.details.failedIndex === 1 && !existsSync(join(T, 'corrupt.pdf')), 'a corrupt image fails in its own op, not at commit')
+  const ex = cli('pages.extract', '--in', FIX, '--out', join(T, 'det.pdf'), '--pages', '1', '--deterministic')
+  const exd = await load(join(T, 'det.pdf'))
+  check(ex.code === 0 && exd.getModificationDate()?.getUTCFullYear() === 2026 && exd.getModificationDate()?.getUTCMonth() === 0, 'deterministic extract fixes the new document dates')
+  const hf = cli('info', '--in', FIX, '--help=false')
+  check(hf.code === 0 && hf.out.ok === true, '--help=false does not show help')
+  const vb = cli('info', '--in', FIX, '--overwrite=sometimes')
+  check(vb.code === 2 && vb.err?.error.code === 'YP_USAGE', 'an invalid meta boolean is a structured usage error')
+  const outDir = join(T, 'rel-parts')
+  const sp = cli('pages.split', '--in', FIX, '--out-dir', outDir, '--every', '2')
+  check(sp.code === 0 && sp.out.outputs.every((o: any) => o.path.startsWith(realpathSync(T))), 'split reports canonical output paths')
+}
+
 console.log('MCP: stdio handshake, tools/list, tools/call')
 await new Promise<void>((resolve) => {
   const child = spawn('node', [CLI, 'mcp'], { stdio: ['pipe', 'pipe', 'pipe'] })
@@ -230,6 +259,9 @@ await new Promise<void>((resolve) => {
         send({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'yonder_pages_delete', arguments: { in: FIX, pages: '9', out: join(T, 'mcp.pdf') } } })
       } else if (m.id === 4) {
         check(m.result.isError === true && /YP_PAGE_RANGE/.test(m.result.content[0].text), 'tools/call reports command errors with isError')
+        send({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'yonder_annotate_date', arguments: { in: FIX, page: 1, out: join(T, 'mcp2.pdf'), dryRun: 'false' } } })
+      } else if (m.id === 5) {
+        check(m.result.isError === true && /YP_INVALID_INPUT/.test(m.result.content[0].text) && !existsSync(join(T, 'mcp2.pdf')), 'MCP rejects a string-valued boolean IO argument before doing anything')
         clearTimeout(timer)
         child.kill()
         resolve()
