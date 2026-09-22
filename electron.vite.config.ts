@@ -25,18 +25,19 @@ function devCsp(): Plugin {
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
-    resolve: { alias: { '@shared': resolve('src/shared') } }
+    resolve: { alias: { '@shared': resolve('src/shared'), '@core': resolve('src/core') } }
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
-    resolve: { alias: { '@shared': resolve('src/shared') } }
+    resolve: { alias: { '@shared': resolve('src/shared'), '@core': resolve('src/core') } }
   },
   renderer: {
     plugins: [react(), devCsp()],
     resolve: {
       alias: {
         '@': resolve('src/renderer/src'),
-        '@shared': resolve('src/shared')
+        '@shared': resolve('src/shared'),
+        '@core': resolve('src/core')
       }
     },
     define: {

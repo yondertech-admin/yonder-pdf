@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Trash2 } from 'lucide-react'
 import { useActiveDoc, useStore } from '@/store/app'
-import { KIND_LABEL } from '@/pdf/types'
+import { KIND_LABEL } from '@core/types'
 
 const COLORS = ['#ffd400', '#ff9d00', '#e5484d', '#e93d82', '#8e4ec6', '#3b6ff5', '#0ea5e9', '#30a46c', '#1a1a1a', '#6b7280', '#ffffff', '#00000000', '#7c3aed', '#a16207']
 

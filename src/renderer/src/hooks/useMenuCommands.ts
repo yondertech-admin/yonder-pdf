@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import type { MenuCommand } from '@shared/api'
 import { useStore } from '@/store/app'
-import { newId } from '@/pdf/types'
+import { newId } from '@core/types'
 import { todayString } from '@/pdf/signature'
 import { applySelectionMarkup } from '@/components/PageView'
 

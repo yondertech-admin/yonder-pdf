@@ -2,8 +2,8 @@
 // copy (annotations + forms flattened) so output always equals what Save
 // would produce (design §12 / finding 18).
 import { documentOptions, pdfjs, type PDFDocumentProxy } from './pdfjs'
-import { writeAnnotations } from './writer'
-import type { Annotation } from './types'
+import { writeAnnotations } from '@core/writer'
+import type { Annotation } from '@core/types'
 
 export interface RasterPage {
   blob: Blob

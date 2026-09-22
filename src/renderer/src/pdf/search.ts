@@ -1,7 +1,7 @@
 // Full-text search. Match rectangles are approximated per text item by
 // proportional character width, which is accurate enough for highlighting.
 import type { PDFDocumentProxy } from 'pdfjs-dist'
-import type { Rect } from './types'
+import type { Rect } from '@core/types'
 
 export interface SearchMatch {
   page: number

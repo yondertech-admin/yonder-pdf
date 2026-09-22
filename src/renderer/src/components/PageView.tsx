@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { makeLinkService, makeViewport, pdfjs, type PageViewport, type PDFPageProxy } from '@/pdf/pdfjs'
 import { useStore, type Doc } from '@/store/app'
 import { Overlay } from './Overlay'
-import { newId, type MarkupAnnotation, type Quad } from '@/pdf/types'
+import { newId, type MarkupAnnotation, type Quad } from '@core/types'
 
 const MARKUP_TOOLS = new Set(['highlight', 'underline', 'strikeout'])
 const ASSET_BASE = new URL('./pdfjs/', document.baseURI).href

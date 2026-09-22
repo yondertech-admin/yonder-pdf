@@ -53,12 +53,15 @@ class CDP {
     await this.mouse('mousePressed', x, y, opts)
     await this.mouse('mouseReleased', x, y, opts)
   }
+  // One synthetic move per frame. Note: Chromium drops synthetic pointer events
+  // whose coordinates fall outside the window's viewport, and a drag that leaves
+  // it never delivers its pointerup — keep gestures inside the visible viewer.
   async drag(x1, y1, x2, y2, steps = 12) {
     await this.mouse('mouseMoved', x1, y1)
     await this.mouse('mousePressed', x1, y1)
     for (let i = 1; i <= steps; i++) {
       await this.mouse('mouseMoved', x1 + ((x2 - x1) * i) / steps, y1 + ((y2 - y1) * i) / steps, { buttons: 1 })
-      await sleep(8)
+      await sleep(20)
     }
     await this.mouse('mouseReleased', x2, y2)
   }

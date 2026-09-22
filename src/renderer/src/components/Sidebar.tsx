@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, FilePlus, Images, List, MessageSquare, RotateCcw, RotateCw, Scissors, Trash2 } from 'lucide-react'
 import { useActiveDoc, useStore, type Doc } from '@/store/app'
 import { resolveDestination, type OutlineNode } from '@/pdf/pdfjs'
-import { KIND_LABEL, type Annotation } from '@/pdf/types'
+import { KIND_LABEL, type Annotation } from '@core/types'
 
 export function Sidebar(): ReactNode {
   const tab = useStore((s) => s.sidebarTab)

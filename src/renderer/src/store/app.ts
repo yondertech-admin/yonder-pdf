@@ -1,11 +1,11 @@
 import { create } from 'zustand'
 import type { OpenedFile, RecentEntry, Settings, UpdateStatus } from '@shared/api'
 import { getOutline, loadPdf, PasswordCancelled, type OutlineNode, type PageInfo, type PDFDocumentProxy } from '@/pdf/pdfjs'
-import { writeAnnotations } from '@/pdf/writer'
-import * as ops from '@/pdf/pageOps'
+import { writeAnnotations } from '@core/writer'
+import * as ops from '@core/pageOps'
 import { searchDocument, type SearchMatch } from '@/pdf/search'
 import { chooseDpi, materialize, renderPage, type Materialized } from '@/pdf/render'
-import { cloneAnnotations, hasUnsupportedText, newId, type Annotation, type Tool, type ToolStyle } from '@/pdf/types'
+import { cloneAnnotations, hasUnsupportedText, newId, type Annotation, type Tool, type ToolStyle } from '@core/types'
 
 export type ZoomMode = 'fit-width' | 'fit-page' | 'custom'
 export type Rotation = 0 | 90 | 180 | 270

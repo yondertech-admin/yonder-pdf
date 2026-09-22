@@ -20,7 +20,8 @@ export default async ({ cdp, sleep, S }) => {
   await cdp.drag(px(80), py(600), px(240), py(560), 20)
   await sleep(200)
   // 3. Rectangle + arrow.
-  await cdp.key('5'); await m(); await cdp.drag(px(320), py(300), px(480), py(200))
+  // Keep every gesture inside the visible viewer (its bottom is ~PDF y 290 at the default zoom): synthetic pointer events outside it are dropped.
+  await cdp.key('5'); await m(); await cdp.drag(px(320), py(480), px(480), py(410))
   await cdp.key('8'); await m(); await cdp.drag(px(320), py(400), px(500), py(330))
   // 4. Text box: click, type, blur via Escape.
   await cdp.key('t'); await m(); await cdp.click(px(80), py(520)); await sleep(300)

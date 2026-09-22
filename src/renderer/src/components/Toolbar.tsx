@@ -27,7 +27,7 @@ import {
   ChevronDown
 } from 'lucide-react'
 import { useActiveDoc, useStore } from '@/store/app'
-import type { Tool } from '@/pdf/types'
+import type { Tool } from '@core/types'
 
 interface ToolDef {
   tool: Tool

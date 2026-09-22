@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useActiveDoc, useStore } from '@/store/app'
 import { Modal, ExternalLink } from './ui'
 import { SignatureDialog } from './SignatureDialog'
-import { parsePageRanges } from '@/pdf/pageOps'
+import { parsePageRanges } from '@core/pageOps'
 
 export function Dialogs(): ReactNode {
   const dialog = useStore((s) => s.dialog)

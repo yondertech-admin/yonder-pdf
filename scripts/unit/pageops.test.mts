@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { PDFDocument } from 'pdf-lib'
-import { deletePages, reorderPages, rotatePages } from '../../src/renderer/src/pdf/pageOps.ts'
+import { deletePages, reorderPages, rotatePages } from '../../src/core/pageOps.ts'
 const bytes = new Uint8Array(readFileSync(new URL('../../test-fixtures/sample.pdf', import.meta.url)))
 const fields = async (b: Uint8Array) => { const d = await PDFDocument.load(b); let n = 0; try { n = d.getForm().getFields().length } catch {} return { pages: d.getPageCount(), fields: n, widgets: (Buffer.from(b).toString('latin1').match(/\/Subtype\s*\/Widget/g) ?? []).length } }
 console.log('original', await fields(bytes))

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { MessageSquare } from 'lucide-react'
 import type { PageViewport } from '@/pdf/pdfjs'
 import { useStore, type Doc } from '@/store/app'
-import { arrowHeadPoints } from '@/pdf/types'
+import { arrowHeadPoints } from '@core/types'
 import { defaultPlacement } from '@/pdf/signature'
 import {
   NOTE_ICON_SIZE,
@@ -17,7 +17,7 @@ import {
   type Point,
   type Rect,
   type TextAnnotation
-} from '@/pdf/types'
+} from '@core/types'
 
 interface VRect {
   x: number
