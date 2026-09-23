@@ -4,6 +4,7 @@ import { listFields } from '../forms'
 import { s } from '../schema'
 import { extractText, searchDocument } from '../text'
 import { rectToQuad } from '../text'
+import { roundRect } from '../space'
 import { boundsOf, translate, type Annotation } from '../types'
 import { parseColor, parseOpacity, parsePage, parsePoint, parsePositive, parseRect } from '../validate'
 import { requireDoc, sha256Hex, type Command, type Outcome } from './context'
@@ -81,6 +82,7 @@ export const info: Command = {
     }
     return {
       result: {
+        coordinates: 'view: page as displayed (after /Rotate), origin bottom-left, points',
         pageCount: pdf.numPages,
         pages,
         metadata: { title: pick('Title'), author: pick('Author'), subject: pick('Subject'), keywords: pick('Keywords'), creator: pick('Creator'), producer: pick('Producer'), created: pick('CreationDate'), modified: pick('ModDate') },
@@ -129,9 +131,11 @@ export const text: Command = {
       last = Math.min(n - 1, first + ((p.limit as number | undefined) ?? 20) - 1)
     }
     const pages: unknown[] = []
+    const doc = requireDoc(ctx)
     for (let i = first; i <= last; i++) {
       const t = await extractText(pdf, i, Boolean(p.layout))
-      pages.push({ page: i + 1, text: t.text, ...(t.lines ? { lines: t.lines.map((l) => ({ text: l.text, rect: round(l.rect) })) } : {}) })
+      const vs = t.lines ? await doc.viewSpace(i) : null
+      pages.push({ page: i + 1, text: t.text, ...(t.lines && vs ? { lines: t.lines.map((l) => ({ text: l.text, rect: roundRect(vs.rectToView(l.rect)) })) } : {}) })
     }
     return { result: { pageCount: n, pages, ...(last < n - 1 ? { nextStart: last + 2 } : {}) } }
   }
@@ -165,12 +169,18 @@ export const find: Command = {
     const limit = (p.limit as number | undefined) ?? 100
     const cursor = (p.cursor as number | undefined) ?? 0
     const slice = matches.slice(cursor, cursor + limit)
+    const doc = requireDoc(ctx)
+    const out: unknown[] = []
+    for (const [k, m] of slice.entries()) {
+      const vs = await doc.viewSpace(m.page)
+      out.push({ occurrence: cursor + k + 1, page: m.page + 1, bounds: roundRect(vs.rectToView(unionRect(m.rects))), quads: m.rects.map(rectToQuad).map((q) => vs.quadToView(q).map((v) => +v.toFixed(2))), snippet: m.snippet, quality: m.quality })
+    }
     return {
       result: {
         query: p.query,
         total: matches.length,
         scope: page === undefined ? 'document' : `page ${page + 1}`,
-        matches: slice.map((m, k) => ({ occurrence: cursor + k + 1, page: m.page + 1, bounds: round(unionRect(m.rects)), quads: m.rects.map(rectToQuad).map((q) => q.map((v) => +v.toFixed(2))), snippet: m.snippet, quality: m.quality })),
+        matches: out,
         ...(cursor + limit < matches.length ? { nextCursor: cursor + limit } : {}),
         ...(truncated ? { truncated: true, warnings: ['More than 2000 matches on a page were not counted; narrow the query.'] } : {})
       }
@@ -197,15 +207,19 @@ export const annotationsList: Command = {
       if (only !== undefined && i !== only) continue
       const page = await pdf.getPage(i + 1)
       const annots = (await page.getAnnotations()) as Array<{ id: string; subtype: string; rect: number[]; contentsObj?: { str: string }; titleObj?: { str: string } }>
+      const vs = await doc.viewSpace(i)
       for (const a of annots) {
         if (a.subtype === 'Widget' || a.subtype === 'Link' || a.subtype === 'Popup') continue
         const [x0, y0, x1, y1] = a.rect
-        file.push({ id: a.id, provenance: 'file', editable: false, removable: false, kind: a.subtype.toLowerCase(), page: i + 1, rect: round({ x: Math.min(x0, x1), y: Math.min(y0, y1), width: Math.abs(x1 - x0), height: Math.abs(y1 - y0) }), contents: a.contentsObj?.str || undefined, author: a.titleObj?.str || undefined })
+        file.push({ id: a.id, provenance: 'file', editable: false, removable: false, kind: a.subtype.toLowerCase(), page: i + 1, rect: roundRect(vs.rectToView({ x: Math.min(x0, x1), y: Math.min(y0, y1), width: Math.abs(x1 - x0), height: Math.abs(y1 - y0) })), contents: a.contentsObj?.str || undefined, author: a.titleObj?.str || undefined })
       }
     }
-    const session = doc.annotations
-      .filter((a) => only === undefined || a.page === only)
-      .map((a) => ({ id: a.id, provenance: 'session', editable: true, removable: true, kind: a.kind, page: a.page + 1, rect: round(boundsOf(a)), ...summary(a) }))
+    const session: unknown[] = []
+    for (const a of doc.annotations) {
+      if (only !== undefined && a.page !== only) continue
+      const vs = await doc.viewSpace(a.page)
+      session.push({ id: a.id, provenance: 'session', editable: true, removable: true, kind: a.kind, page: a.page + 1, rect: roundRect(vs.rectToView(boundsOf(a))), ...summary(a) })
+    }
     const slice = file.slice(cursor, cursor + limit)
     return { result: { rev: doc.rev, session, file: slice, fileTotal: file.length, ...(cursor + limit < file.length ? { nextCursor: cursor + limit } : {}) } }
   }
@@ -261,8 +275,8 @@ export const annotationsUpdate: Command = {
       opacity: s.num('0–1', { minimum: 0, maximum: 1 }),
       text: s.str('New text (text box / note)'),
       fontSize: s.num('Font size in points', { exclusiveMinimum: 0 }),
-      move: s.str('Offset "dx,dy" in points'),
-      rect: s.str('New box "x,y,width,height" (text, image, rect, ellipse)')
+      move: s.str('Offset "dx,dy" in points (view space)'),
+      rect: s.str('New box "x,y,width,height" in view space (text, image, rect, ellipse)')
     },
     ['id']
   ),
@@ -300,17 +314,18 @@ export const annotationsUpdate: Command = {
       }
     }
     let next: Annotation = { ...a, ...patch } as Annotation
+    const vs = await requireDoc(ctx).viewSpace(a.page)
     if (p.move !== undefined) {
-      const d = parsePoint(String(p.move))
+      const d = vs.deltaToUser(parsePoint(String(p.move)))
       next = translate(next, d.x, d.y)
     }
     if (p.rect !== undefined) {
       if (!('rect' in next)) throw new YonderError('YP_INVALID_INPUT', `${a.kind} annotations have no rect; use --move`)
-      next = { ...next, rect: parseRect(p.rect as string) } as Annotation
+      next = { ...next, rect: vs.rectToUser(parseRect(p.rect as string)) } as Annotation
     }
     sess.update(a.id, next)
     requireDoc(ctx).touch()
-    return { result: { updated: a.id, kind: a.kind, bounds: round(boundsOf(next)), ...(warnings.length ? { warnings } : {}) } }
+    return { result: { updated: a.id, kind: a.kind, bounds: roundRect(vs.rectToView(boundsOf(next))), ...(warnings.length ? { warnings } : {}) } }
   }
 }
 

@@ -8,6 +8,7 @@ import { hasSignatureFields } from '../forms'
 import * as ops from '../pageOps'
 import type { Schema } from '../schema'
 import { Session } from '../session'
+import { ViewSpace } from '../space'
 import type { Annotation } from '../types'
 import { writeAnnotations, type WriteOptions } from '../writer'
 
@@ -38,6 +39,7 @@ export interface SavedSignatureRef {
 export class InputDoc {
   private _session: Session | null = null
   private _pdfjs: LoadedPdfjs | null = null
+  private spaces = new Map<number, ViewSpace>()
   private structureDirty = false
   private pendingAnnotations: Annotation[] = []
   private _encrypted: boolean | null = null
@@ -151,6 +153,18 @@ export class InputDoc {
     return (await this.pdfjs()).numPages
   }
 
+  /** View ↔ user space converter for a page (0-based), from the current pdf.js proxy. */
+  async viewSpace(index: number): Promise<ViewSpace> {
+    const pdf = await this.pdfjs()
+    const hit = this.spaces.get(index)
+    if (hit) return hit
+    if (!Number.isInteger(index) || index < 0 || index >= pdf.numPages) throw new YonderError('YP_PAGE_RANGE', `Page ${index + 1} does not exist (document has ${pdf.numPages} page${pdf.numPages === 1 ? '' : 's'})`)
+    const page = await pdf.getPage(index + 1)
+    const vs = new ViewSpace(page.getViewport({ scale: 1 }))
+    this.spaces.set(index, vs)
+    return vs
+  }
+
   /** The page's own /Rotate, needed for oriented annotations (text, note, image). */
   async pageRotate(index: number): Promise<number> {
     const sess = await this.session()
@@ -168,6 +182,7 @@ export class InputDoc {
   private async dropPdfjs(): Promise<void> {
     const p = this._pdfjs
     this._pdfjs = null
+    this.spaces.clear()
     if (p) await p.destroy().catch(() => undefined)
   }
 

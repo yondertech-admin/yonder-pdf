@@ -14,8 +14,11 @@ export const fields: Command = {
   params: s.obj({}),
   examples: ['yonder-pdf forms.fields --in form.pdf --json'],
   async run(ctx): Promise<Outcome> {
-    const list = await listFields(await requireDoc(ctx).pdfjs())
-    return { result: { fields: list.map((f) => ({ ...f, page: f.page + 1 })) } }
+    const doc = requireDoc(ctx)
+    const list = await listFields(await doc.pdfjs())
+    const out: unknown[] = []
+    for (const f of list) out.push({ ...f, page: f.page + 1, rect: (await doc.viewSpace(f.page)).rectToView(f.rect) })
+    return { result: { fields: out } }
   }
 }
 

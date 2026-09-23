@@ -1,12 +1,14 @@
-// Annotation commands. Geometry is PDF user space (points, origin bottom-left,
-// unrotated page); every placement also accepts a text anchor (design §14.1 #4).
+// Annotation commands. Every coordinate here is *view space* — the page as the
+// user sees it (after /Rotate), origin bottom-left, points (design §14.1 #5,
+// revised 2026-09-22 after a client's /Rotate 270 scans). Conversion to the
+// stored user space happens once, through the page's ViewSpace.
 import { placeRelative, resolveAnchor, type Align } from '../anchors'
 import { YonderError } from '../errors'
 import { assertEmbeddable, fitWidth, imageInfo, toDataUrl } from '../images'
 import { s, type Schema } from '../schema'
-import { NOTE_ICON_SIZE, boundsOf, type Annotation, type NewAnnotation, type Quad, type Rect } from '../types'
+import { roundRect } from '../space'
+import { NOTE_ICON_SIZE, boundsOf, type Annotation, type NewAnnotation, type Rect } from '../types'
 import { parseColor, parseOpacity, parsePage, parsePaths, parsePoint, parsePositive, parseQuads, parseRect } from '../validate'
-import { YonderError as YErr } from '../errors'
 import { requireDoc, type Command, type CommandContext, type Outcome, type Params } from './context'
 
 const anchorParams: Record<string, Schema> = {
@@ -20,50 +22,47 @@ const colorParam = (d: string): Schema => s.str(`Colour, hex (default ${d})`)
 const opacityParam = s.num('Opacity 0–1 (default 1)', { minimum: 0, maximum: 1 })
 const widthParam = s.num('Stroke width in points (default 2)', { exclusiveMinimum: 0 })
 
-const round = (r: Rect): Rect => ({ x: +r.x.toFixed(2), y: +r.y.toFixed(2), width: +r.width.toFixed(2), height: +r.height.toFixed(2) })
-
 interface Placement {
   page: number
+  /** Stored (user-space) box. */
   rect: Rect
+  /** The same box as the user sees it. */
+  view: Rect
   anchor?: { occurrence: number; total: number; snippet: string; quality: 'estimated' }
 }
 
 interface SizePolicy {
-  /** Display-space size (width/height as the reader sees them at rotation 0). */
+  /** View-space size. */
   size: { width: number; height: number }
   /** True when the caller gave an explicit size; false = a default that may yield to the anchor box. */
   explicit: boolean
-  /** Oriented content (text, note, image) turns with the page: swap display size on 90°/270° pages (REVIEW-05 #7). */
-  oriented: boolean
 }
 
-/** Display size → user-space size for the given page rotation. */
-function userSpaceSize(size: { width: number; height: number }, rotate: number, oriented: boolean): { width: number; height: number } {
-  return oriented && rotate % 180 !== 0 ? { width: size.height, height: size.width } : size
-}
-
-/** Resolve --page/--rect/--at or an anchor into a page + box for a box-shaped annotation. */
+/** Resolve --page/--rect/--at (view space) or a text anchor into a page + box. */
 async function placeBox(ctx: CommandContext, p: Params, policy: SizePolicy, defaultAlign: Align): Promise<Placement> {
   const doc = requireDoc(ctx)
   if (p.text !== undefined && p.rect === undefined && p.at === undefined) {
     const pdf = await doc.pdfjs()
     const page = p.page === undefined ? undefined : parsePage(p.page as number, pdf.numPages)
     const a = await resolveAnchor(pdf, { text: String(p.text), page, occurrence: p.occurrence as number | undefined })
+    const vs = await doc.viewSpace(a.page)
+    const anchorView = vs.rectToView(a.bounds)
     const align = (p.align as Align | undefined) ?? defaultAlign
-    const rotate = await doc.pageRotate(a.page)
-    const box = align === 'on' && !policy.explicit ? { width: a.bounds.width, height: a.bounds.height } : userSpaceSize(policy.size, rotate, policy.oriented)
+    const box = align === 'on' && !policy.explicit ? { width: anchorView.width, height: anchorView.height } : policy.size
     const offset = p.offset === undefined ? undefined : parsePoint(String(p.offset))
-    return { page: a.page, rect: placeRelative(a.bounds, align, box, offset), anchor: { occurrence: a.occurrence, total: a.total, snippet: a.snippet, quality: a.quality } }
+    const view = placeRelative(anchorView, align, box, offset)
+    return { page: a.page, rect: vs.rectToUser(view), view, anchor: { occurrence: a.occurrence, total: a.total, snippet: a.snippet, quality: a.quality } }
   }
   if (p.page === undefined) throw new YonderError('YP_USAGE', 'Give --page with --rect/--at, or use --text to anchor to words on the page')
   const page = parsePage(p.page as number, await doc.pageCount())
-  if (p.rect !== undefined) return { page, rect: parseRect(p.rect as string) }
-  if (p.at !== undefined) {
+  const vs = await doc.viewSpace(page)
+  let view: Rect
+  if (p.rect !== undefined) view = parseRect(p.rect as string)
+  else if (p.at !== undefined) {
     const at = parsePoint(String(p.at))
-    const size = userSpaceSize(policy.size, await doc.pageRotate(page), policy.oriented)
-    return { page, rect: { x: at.x, y: at.y, width: size.width, height: size.height } }
-  }
-  throw new YonderError('YP_USAGE', 'Give --rect "x,y,w,h", --at "x,y" or --text "anchor words"')
+    view = { x: at.x, y: at.y, width: policy.size.width, height: policy.size.height }
+  } else throw new YonderError('YP_USAGE', 'Give --rect "x,y,w,h", --at "x,y" or --text "anchor words"')
+  return { page, rect: vs.rectToUser(view), view }
 }
 
 async function add(ctx: CommandContext, a: NewAnnotation): Promise<Annotation> {
@@ -74,7 +73,11 @@ async function add(ctx: CommandContext, a: NewAnnotation): Promise<Annotation> {
   return full
 }
 
-const created = (a: Annotation, extra: Record<string, unknown> = {}): Outcome => ({ result: { created: a.id, kind: a.kind, page: a.page + 1, bounds: round(boundsOf(a)), ...extra } })
+/** Result for a created annotation; `bounds` is reported in view space. */
+async function created(ctx: CommandContext, a: Annotation, extra: Record<string, unknown> = {}): Promise<Outcome> {
+  const vs = await requireDoc(ctx).viewSpace(a.page)
+  return { result: { created: a.id, kind: a.kind, page: a.page + 1, bounds: roundRect(vs.rectToView(boundsOf(a))), ...extra } }
+}
 
 function markup(kind: 'highlight' | 'underline' | 'strikeout', defaultColor: string): Command {
   return {
@@ -89,7 +92,7 @@ function markup(kind: 'highlight' | 'underline' | 'strikeout', defaultColor: str
       occurrence: anchorParams.occurrence,
       page: pageParam,
       case: s.bool('Case-sensitive anchor match'),
-      quads: s.anyOf([s.str('"ulx,uly,urx,ury,llx,lly,lrx,lry;…"'), s.arr(s.arr(s.num('coordinate'), 'one quad, 8 numbers'), 'quads')], 'Explicit quads (with --page): a string or the `quads` array from find'),
+      quads: s.anyOf([s.str('"ulx,uly,urx,ury,llx,lly,lrx,lry;…"'), s.arr(s.arr(s.num('coordinate'), 'one quad, 8 numbers'), 'quads')], 'Explicit quads in view space (with --page): a string or the `quads` array from find'),
       color: colorParam(defaultColor),
       opacity: opacityParam
     }),
@@ -97,13 +100,14 @@ function markup(kind: 'highlight' | 'underline' | 'strikeout', defaultColor: str
     async run(ctx, p): Promise<Outcome> {
       const doc = requireDoc(ctx)
       let page: number
-      let quads: Quad[]
+      let quads
       let anchor: Placement['anchor']
       let matched: string | undefined
       if (p.quads !== undefined) {
         if (p.page === undefined) throw new YonderError('YP_USAGE', '--quads needs --page')
         page = parsePage(p.page as number, await doc.pageCount())
-        quads = parseQuads(p.quads as string | number[][])
+        const vs = await doc.viewSpace(page)
+        quads = parseQuads(p.quads as string | number[][]).map((q) => vs.quadToUser(q))
       } else if (p.text !== undefined) {
         const pdf = await doc.pdfjs()
         const only = p.page === undefined ? undefined : parsePage(p.page as number, pdf.numPages)
@@ -114,7 +118,7 @@ function markup(kind: 'highlight' | 'underline' | 'strikeout', defaultColor: str
         matched = String(p.text)
       } else throw new YonderError('YP_USAGE', 'Give --text "words" or --page + --quads')
       const a = await add(ctx, { kind, page, quads, color: parseColor((p.color as string | undefined) ?? defaultColor), opacity: p.opacity === undefined ? 1 : parseOpacity(p.opacity as number), ...(matched ? { text: matched } : {}) })
-      return created(a, anchor ? { anchor } : {})
+      return created(ctx, a, anchor ? { anchor } : {})
     }
   }
 }
@@ -146,11 +150,11 @@ export const textBox: Command = {
   async run(ctx, p): Promise<Outcome> {
     const fontSize = p.fontSize === undefined ? 12 : parsePositive(p.fontSize as number, 'fontSize', 400)
     const width = p.width === undefined ? 180 : parsePositive(p.width as number, 'width', 5000)
-    const place = await placeBox(ctx, p, { size: { width, height: fontSize * 1.2 + 6 }, explicit: true, oriented: true }, 'below')
+    const place = await placeBox(ctx, p, { size: { width, height: fontSize * 1.2 + 6 }, explicit: true }, 'below')
     const content = String(p.content)
     const a = await add(ctx, { kind: 'text', page: place.page, rect: place.rect, text: content, fontSize, color: parseColor((p.color as string | undefined) ?? '#1a1a1a'), rotate: await requireDoc(ctx).pageRotate(place.page) })
     const warnings = /[^\x00-\xff]/.test(content) ? ['Some characters are outside WinAnsi and will render as "?" (Unicode text boxes are planned).'] : []
-    return created(a, { ...(place.anchor ? { anchor: place.anchor } : {}), ...(warnings.length ? { warnings } : {}) })
+    return created(ctx, a, { ...(place.anchor ? { anchor: place.anchor } : {}), ...(warnings.length ? { warnings } : {}) })
   }
 }
 
@@ -183,11 +187,12 @@ export const note: Command = {
       if (p.page === undefined) throw new YonderError('YP_USAGE', '--at needs --page')
       const page = parsePage(p.page as number, await doc.pageCount())
       const at = parsePoint(String(p.at))
-      place = { page, rect: { x: at.x, y: at.y - size.height, width: size.width, height: size.height } }
-    } else place = await placeBox(ctx, p, { size, explicit: true, oriented: true }, 'right')
+      const view = { x: at.x, y: at.y - size.height, width: size.width, height: size.height }
+      place = { page, rect: (await doc.viewSpace(page)).rectToUser(view), view }
+    } else place = await placeBox(ctx, p, { size, explicit: true }, 'right')
     const r = place.rect
     const a = await add(ctx, { kind: 'note', page: place.page, at: { x: r.x, y: r.y + r.height }, text: String(p.content), color: parseColor((p.color as string | undefined) ?? '#ffd400'), rotate: await requireDoc(ctx).pageRotate(place.page) })
-    return created(a, place.anchor ? { anchor: place.anchor } : {})
+    return created(ctx, a, place.anchor ? { anchor: place.anchor } : {})
   }
 }
 
@@ -215,10 +220,14 @@ function shape(kind: 'rect' | 'ellipse'): Command {
     examples: [`yonder-pdf annotate.${kind} --in a.pdf --out b.pdf --text "Total due" --color "#e5484d"`],
     async run(ctx, p): Promise<Outcome> {
       const pad = p.padding === undefined ? 2 : (p.padding as number)
-      const place = await placeBox(ctx, p, { size: { width: 100, height: 40 }, explicit: false, oriented: false }, 'on')
-      const r = place.anchor && (p.align === undefined || p.align === 'on') ? { x: place.rect.x - pad, y: place.rect.y - pad, width: place.rect.width + 2 * pad, height: place.rect.height + 2 * pad } : place.rect
-      const a = await add(ctx, { kind, page: place.page, rect: r, color: parseColor((p.color as string | undefined) ?? '#e5484d'), fill: p.fill === undefined ? null : parseColor(p.fill as string), width: p.width === undefined ? 2 : parsePositive(p.width as number, 'width', 100), opacity: p.opacity === undefined ? 1 : parseOpacity(p.opacity as number) })
-      return created(a, place.anchor ? { anchor: place.anchor } : {})
+      const place = await placeBox(ctx, p, { size: { width: 100, height: 40 }, explicit: false }, 'on')
+      let rect = place.rect
+      if (place.anchor && (p.align === undefined || p.align === 'on')) {
+        const v = place.view
+        rect = (await requireDoc(ctx).viewSpace(place.page)).rectToUser({ x: v.x - pad, y: v.y - pad, width: v.width + 2 * pad, height: v.height + 2 * pad })
+      }
+      const a = await add(ctx, { kind, page: place.page, rect, color: parseColor((p.color as string | undefined) ?? '#e5484d'), fill: p.fill === undefined ? null : parseColor(p.fill as string), width: p.width === undefined ? 2 : parsePositive(p.width as number, 'width', 100), opacity: p.opacity === undefined ? 1 : parseOpacity(p.opacity as number) })
+      return created(ctx, a, place.anchor ? { anchor: place.anchor } : {})
     }
   }
 }
@@ -234,9 +243,11 @@ function lineLike(kind: 'line' | 'arrow'): Command {
     params: s.obj({ page: pageParam, from: s.str('Start "x,y"'), to: s.str('End "x,y"'), color: colorParam('#e5484d'), width: widthParam, opacity: opacityParam }, ['page', 'from', 'to']),
     examples: [`yonder-pdf annotate.${kind} --in a.pdf --out b.pdf --page 1 --from 72,500 --to 300,520`],
     async run(ctx, p): Promise<Outcome> {
-      const page = parsePage(p.page as number, await requireDoc(ctx).pageCount())
-      const a = await add(ctx, { kind, page, from: parsePoint(String(p.from)), to: parsePoint(String(p.to)), color: parseColor((p.color as string | undefined) ?? '#e5484d'), width: p.width === undefined ? 2 : parsePositive(p.width as number, 'width', 100), opacity: p.opacity === undefined ? 1 : parseOpacity(p.opacity as number) })
-      return created(a)
+      const doc = requireDoc(ctx)
+      const page = parsePage(p.page as number, await doc.pageCount())
+      const vs = await doc.viewSpace(page)
+      const a = await add(ctx, { kind, page, from: vs.toUser(parsePoint(String(p.from))), to: vs.toUser(parsePoint(String(p.to))), color: parseColor((p.color as string | undefined) ?? '#e5484d'), width: p.width === undefined ? 2 : parsePositive(p.width as number, 'width', 100), opacity: p.opacity === undefined ? 1 : parseOpacity(p.opacity as number) })
+      return created(ctx, a)
     }
   }
 }
@@ -250,9 +261,11 @@ export const ink: Command = {
   produces: 'document',
   params: s.obj({ page: pageParam, path: s.str('Stroke points'), color: colorParam('#e5484d'), width: widthParam, opacity: opacityParam }, ['page', 'path']),
   async run(ctx, p): Promise<Outcome> {
-    const page = parsePage(p.page as number, await requireDoc(ctx).pageCount())
-    const a = await add(ctx, { kind: 'ink', page, paths: parsePaths(String(p.path)), color: parseColor((p.color as string | undefined) ?? '#e5484d'), width: p.width === undefined ? 2 : parsePositive(p.width as number, 'width', 100), opacity: p.opacity === undefined ? 1 : parseOpacity(p.opacity as number) })
-    return created(a)
+    const doc = requireDoc(ctx)
+    const page = parsePage(p.page as number, await doc.pageCount())
+    const vs = await doc.viewSpace(page)
+    const a = await add(ctx, { kind: 'ink', page, paths: vs.pathsToUser(parsePaths(String(p.path))), color: parseColor((p.color as string | undefined) ?? '#e5484d'), width: p.width === undefined ? 2 : parsePositive(p.width as number, 'width', 100), opacity: p.opacity === undefined ? 1 : parseOpacity(p.opacity as number) })
+    return created(ctx, a)
   }
 }
 
@@ -285,9 +298,9 @@ function imageLike(name: string, role: 'image' | 'stamp' | 'signature' | 'initia
       let dataUrl: string
       let info: { width: number; height: number; mime: 'image/png' | 'image/jpeg' }
       if (p.saved !== undefined) {
-        if (!ctx.savedSignatures) throw new YErr('YP_UNSUPPORTED', 'Saved signatures are not reachable here')
+        if (!ctx.savedSignatures) throw new YonderError('YP_UNSUPPORTED', 'Saved signatures are not reachable here')
         const hit = (await ctx.savedSignatures()).find((x) => x.id === p.saved)
-        if (!hit) throw new YErr('YP_NOT_FOUND', `No saved signature with id ${p.saved}`, 'Run signatures.list to see the ids.')
+        if (!hit) throw new YonderError('YP_NOT_FOUND', `No saved signature with id ${p.saved}`, 'Run signatures.list to see the ids.')
         dataUrl = hit.dataUrl
         info = { width: hit.width, height: hit.height, mime: hit.dataUrl.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png' }
       } else if (p.image !== undefined) {
@@ -295,20 +308,23 @@ function imageLike(name: string, role: 'image' | 'stamp' | 'signature' | 'initia
         info = imageInfo(bytes)
         await assertEmbeddable(bytes, info)
         dataUrl = toDataUrl(bytes, info.mime)
-      } else throw new YErr('YP_USAGE', 'Give --image <png|jpg> or --saved <id>')
+      } else throw new YonderError('YP_USAGE', 'Give --image <png|jpg> or --saved <id>')
       const explicitWidth = p.width !== undefined
       const width = explicitWidth ? parsePositive(p.width as number, 'width', 5000) : defaultWidth
-      const place = await placeBox(ctx, p, { size: fitWidth(info, width), explicit: explicitWidth, oriented: true }, role === 'signature' || role === 'initials' ? 'right' : 'below')
-      const rect = p.rect !== undefined ? place.rect : p.align === 'on' && !explicitWidth && place.anchor ? fitAnchored(place.rect, info, await requireDoc(ctx).pageRotate(place.page)) : place.rect
+      const place = await placeBox(ctx, p, { size: fitWidth(info, width), explicit: explicitWidth }, role === 'signature' || role === 'initials' ? 'right' : 'below')
+      let rect = place.rect
+      if (p.rect === undefined && p.align === 'on' && !explicitWidth && place.anchor) {
+        // Keep the image's aspect inside the anchor box (all in view space).
+        rect = (await requireDoc(ctx).viewSpace(place.page)).rectToUser(fitInside(place.view, info))
+      }
       const a = await add(ctx, { kind: 'image', page: place.page, rect, dataUrl, role, rotate: await requireDoc(ctx).pageRotate(place.page) })
-      return created(a, { image: { width: info.width, height: info.height, mime: info.mime }, ...(place.anchor ? { anchor: place.anchor } : {}) })
+      return created(ctx, a, { image: { width: info.width, height: info.height, mime: info.mime }, ...(place.anchor ? { anchor: place.anchor } : {}) })
     }
   }
 }
 
-/** When placed "on" an anchor without a width, keep the image's *display* aspect inside the anchor box (swapped on 90°/270° pages). */
-function fitAnchored(box: Rect, info: { width: number; height: number }, rotate: number): Rect {
-  const ratio = rotate % 180 !== 0 ? info.width / info.height : info.height / info.width
+function fitInside(box: Rect, info: { width: number; height: number }): Rect {
+  const ratio = info.height / info.width
   let w = box.width
   let h = w * ratio
   if (h > box.height) {
@@ -343,19 +359,17 @@ export const date: Command = {
       h = 18,
       m = 36
     let place: Placement
-    if (p.at !== undefined || p.text !== undefined) place = await placeBox(ctx, p, { size: { width: w, height: h }, explicit: true, oriented: true }, 'right')
+    if (p.at !== undefined || p.text !== undefined) place = await placeBox(ctx, p, { size: { width: w, height: h }, explicit: true }, 'right')
     else {
       if (p.page === undefined) throw new YonderError('YP_USAGE', 'Give --page (or --text to anchor)')
-      const pdf = await doc.pdfjs()
-      const idx = parsePage(p.page as number, pdf.numPages)
-      const page = await pdf.getPage(idx + 1)
-      const vp = page.getViewport({ scale: 1 })
-      const [x1, y1] = vp.convertToPdfPoint(vp.width - m - w, m)
-      const [x2, y2] = vp.convertToPdfPoint(vp.width - m, m + h)
-      place = { page: idx, rect: { x: Math.min(x1, x2), y: Math.min(y1, y2), width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) } }
+      const page = parsePage(p.page as number, await doc.pageCount())
+      const vs = await doc.viewSpace(page)
+      // Top-right corner of the page as displayed (the toolbar's Date button does the same).
+      const view = { x: vs.width - m - w, y: vs.height - m - h, width: w, height: h }
+      place = { page, rect: vs.rectToUser(view), view }
     }
     const a = await add(ctx, { kind: 'text', page: place.page, rect: place.rect, text: label, fontSize: 11, color: '#1a1a1a', rotate: await doc.pageRotate(place.page) })
-    return created(a, { text: label, ...(place.anchor ? { anchor: place.anchor } : {}) })
+    return created(ctx, a, { text: label, ...(place.anchor ? { anchor: place.anchor } : {}) })
   }
 }
 
@@ -368,7 +382,7 @@ export const signaturesList: Command = {
   produces: 'none',
   params: s.obj({}),
   async run(ctx): Promise<Outcome> {
-    if (!ctx.savedSignatures) throw new YErr('YP_UNSUPPORTED', 'Saved signatures are not reachable here')
+    if (!ctx.savedSignatures) throw new YonderError('YP_UNSUPPORTED', 'Saved signatures are not reachable here')
     const list = await ctx.savedSignatures()
     return { result: { signatures: list.map((x) => ({ id: x.id, kind: x.kind, width: x.width, height: x.height, createdAt: new Date(x.createdAt).toISOString() })) } }
   }

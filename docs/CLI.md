@@ -103,8 +103,8 @@ Scope: both · needs `--in`: yes · writes: document
 | `--opacity` | number | 0–1 |
 | `--text` | string | New text (text box / note) |
 | `--font-size` | number | Font size in points |
-| `--move` | string | Offset "dx,dy" in points |
-| `--rect` | string | New box "x,y,width,height" (text, image, rect, ellipse) |
+| `--move` | string | Offset "dx,dy" in points (view space) |
+| `--rect` | string | New box "x,y,width,height" in view space (text, image, rect, ellipse) |
 
 ### `annotations.remove`
 
@@ -130,7 +130,7 @@ Scope: both · needs `--in`: yes · writes: document
 | `--occurrence` | integer | Which occurrence of the anchor text (1-based) |
 | `--page` | integer | Page number (1-based) |
 | `--case` | boolean | Case-sensitive anchor match |
-| `--quads` | string \| array | Explicit quads (with --page): a string or the `quads` array from find |
+| `--quads` | string \| array | Explicit quads in view space (with --page): a string or the `quads` array from find |
 | `--color` | string | Colour, hex (default #ffd400) |
 | `--opacity` | number | Opacity 0–1 (default 1) |
 
@@ -151,7 +151,7 @@ Scope: both · needs `--in`: yes · writes: document
 | `--occurrence` | integer | Which occurrence of the anchor text (1-based) |
 | `--page` | integer | Page number (1-based) |
 | `--case` | boolean | Case-sensitive anchor match |
-| `--quads` | string \| array | Explicit quads (with --page): a string or the `quads` array from find |
+| `--quads` | string \| array | Explicit quads in view space (with --page): a string or the `quads` array from find |
 | `--color` | string | Colour, hex (default #e5484d) |
 | `--opacity` | number | Opacity 0–1 (default 1) |
 
@@ -172,7 +172,7 @@ Scope: both · needs `--in`: yes · writes: document
 | `--occurrence` | integer | Which occurrence of the anchor text (1-based) |
 | `--page` | integer | Page number (1-based) |
 | `--case` | boolean | Case-sensitive anchor match |
-| `--quads` | string \| array | Explicit quads (with --page): a string or the `quads` array from find |
+| `--quads` | string \| array | Explicit quads in view space (with --page): a string or the `quads` array from find |
 | `--color` | string | Colour, hex (default #e5484d) |
 | `--opacity` | number | Opacity 0–1 (default 1) |
 

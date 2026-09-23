@@ -22,7 +22,8 @@
     "e2e": "node scripts/e2e/cdp.mjs scripts/e2e/annotate.mjs && node scripts/e2e/cdp.mjs scripts/e2e/pages.mjs && node scripts/e2e/cdp.mjs scripts/e2e/reopen.mjs e2e-out/saved.pdf && node scripts/e2e/cdp.mjs scripts/e2e/ads.mjs",
     "fixture": "node scripts/make-fixture.mjs",
     "test:unit": "npm run build:cli && node --experimental-strip-types --no-warnings scripts/unit/pageops.test.mts && node --experimental-strip-types --no-warnings scripts/unit/cli.test.mts",
-    "fixture:forms": "node scripts/make-fixture-forms.mjs"
+    "fixture:forms": "node scripts/make-fixture-forms.mjs",
+    "fixture:rotated": "node scripts/make-fixture-rotated.mjs"
   },
   "dependencies": {
     "@fontsource/caveat": "^5.3.0",

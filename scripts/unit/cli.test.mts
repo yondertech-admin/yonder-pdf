@@ -5,14 +5,19 @@ import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
 import { PDFDocument, PDFName } from 'pdf-lib'
 
 const root = new URL('../../', import.meta.url)
 const CLI = new URL('out/cli/index.mjs', root).pathname
 const FIX = new URL('test-fixtures/sample.pdf', root).pathname
 const FORMS = new URL('test-fixtures/forms.pdf', root).pathname
+const ROT = new URL('test-fixtures/rotated.pdf', root).pathname
 const T = realpathSync(mkdtempSync(join(tmpdir(), 'yonder-cli-')))
 let failures = 0
+const wide = join(T, 'wide.png')
+// 4×2 transparent PNG (2:1)
+writeFileSync(wide, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1jAAAAEUlEQVQIW2NkYGD4z8DAwAAABAABGqvLQwAAAABJRU5ErkJggg==', 'base64'))
 const check = (cond: unknown, msg: string): void => {
   if (cond) console.log('  ok  ', msg)
   else {
@@ -158,9 +163,11 @@ console.log('CLI: review-05 paths — forms fixture, guards, rotation, ordering,
   const vf = cli('forms.fill', '--in', FORMS, '--out', join(T, 'vf.pdf'), '--acknowledge-signature-invalidation', '--values-file', join(T, 'vals.json'))
   check(vf.code === 0 && (await load(join(T, 'vf.pdf'))).getForm().getTextField('name').getText() === 'From file', '--values-file fills from JSON')
 
-  // Rotated page: a display-sized default box is turned into user space (REVIEW-05 #7).
+  // Rotated page: coordinates are view space; the stored user-space box is swapped (REVIEW-05 #7, Adara scans).
   const rot = cli('annotate.text', '--in', FIX, '--out', join(T, 'rot-text.pdf'), '--page', '3', '--at', '100,100', '--content', 'Landscape')
-  check(rot.code === 0 && rot.out.result.bounds.width === 20.4 && rot.out.result.bounds.height === 180, 'text box on a /Rotate 90 page stores swapped width/height')
+  const rotDict = (await load(join(T, 'rot-text.pdf'))).getPage(2)
+  const rotRect = (rotDict.node.Annots() && ((await load(join(T, 'rot-text.pdf'))).context.lookup(rotDict.node.Annots()!.get(0)) as any).get(PDFName.of('Rect')).asArray().map((n: any) => n.asNumber())) as number[]
+  check(rot.code === 0 && rot.out.result.bounds.width === 180 && rot.out.result.bounds.height === 20.4 && +Math.abs(rotRect[2] - rotRect[0]).toFixed(1) === 20.4 && +Math.abs(rotRect[3] - rotRect[1]).toFixed(1) === 180, 'text box on a /Rotate 90 page: view bounds 180×20.4, stored /Rect 20.4×180')
   const rot2 = cli('annotate.text', '--in', FIX, '--out', join(T, 'rot-text2.pdf'), '--page', '1', '--at', '100,100', '--content', 'Portrait')
   check(rot2.code === 0 && rot2.out.result.bounds.width === 180 && rot2.out.result.bounds.height === 20.4, 'same box on an unrotated page keeps display size')
 
@@ -207,13 +214,10 @@ console.log('CLI: review-06 paths')
   const back = cli('forms.fields', '--in', join(T, 'ms.pdf'))
   const toppings = back.out.result.fields.find((f: any) => f.name === 'toppings')
   check(ms.code === 0 && Array.isArray(toppings.value) && toppings.value.sort().join() === 'olives,peppers', 'multi-select list box reads back every selected value')
-  const wide = join(T, 'wide.png')
-  // 4×2 transparent PNG (2:1)
-  writeFileSync(wide, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1jAAAAEUlEQVQIW2NkYGD4z8DAwAAABAABGqvLQwAAAABJRU5ErkJggg==', 'base64'))
   const ri = cli('annotate.image', '--in', FIX, '--out', join(T, 'ri.pdf'), '--page', '3', '--at', '100,100', '--image', wide)
-  check(ri.code === 0 && ri.out.result.bounds.width === 100 && ri.out.result.bounds.height === 200, 'a 2:1 image on a /Rotate 90 page stores a 1:2 user-space box (displays 2:1)')
+  check(ri.code === 0 && ri.out.result.bounds.width === 200 && ri.out.result.bounds.height === 100, 'a 2:1 image on a /Rotate 90 page reports a 2:1 view box')
   const ra = cli('annotate.image', '--in', FIX, '--out', join(T, 'ra.pdf'), '--page', '3', '--text', 'Signature box', '--align', 'on', '--image', wide)
-  check(ra.code === 0 && ra.out.result.bounds.height > ra.out.result.bounds.width, 'anchored "on" image keeps display aspect on a rotated page')
+  check(ra.code === 0 && ra.out.result.bounds.width > ra.out.result.bounds.height, 'anchored "on" image keeps display aspect on a rotated page')
   const bad = join(T, 'bad.png')
   writeFileSync(bad, Buffer.concat([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAYAAAB/qH1j', 'base64'), Buffer.from('garbage-garbage-garbage')]))
   const corrupt = cli('apply', '--in', FIX, '--out', join(T, 'corrupt.pdf'), '--ops', JSON.stringify([{ command: 'annotate.note', params: { page: 1, at: '1,1', content: 'x' } }, { command: 'annotate.image', params: { page: 1, at: '10,10', image: bad } }]))
@@ -228,6 +232,60 @@ console.log('CLI: review-06 paths')
   const outDir = join(T, 'rel-parts')
   const sp = cli('pages.split', '--in', FIX, '--out-dir', outDir, '--every', '2')
   check(sp.code === 0 && sp.out.outputs.every((o: any) => o.path.startsWith(realpathSync(T))), 'split reports canonical output paths')
+}
+
+console.log('CLI: view-space coordinates on /Rotate 0/90/180/270 pages (rotated.pdf)')
+{
+  // Independent check: convert the stored user-space /Rect back to view space with pdf.js itself.
+  const pdfjs = await import(createRequire(import.meta.url).resolve('pdfjs-dist/legacy/build/pdf.mjs'))
+  const viewRect = async (file: string, pageIndex: number): Promise<{ x: number; y: number; width: number; height: number; rotate: number }> => {
+    const d = await load(file)
+    const dict = d.context.lookup(d.getPage(pageIndex).node.Annots()!.get(0)) as any
+    const [x0, y0, x1, y1] = dict.get(PDFName.of('Rect')).asArray().map((n: any) => n.asNumber())
+    const task = pdfjs.getDocument({ data: new Uint8Array(readFileSync(file)), verbosity: 0, useSystemFonts: false })
+    const doc = await task.promise
+    const page = await doc.getPage(pageIndex + 1)
+    const vp = page.getViewport({ scale: 1 })
+    const [ax, ay] = vp.convertToViewportPoint(x0, y0)
+    const [bx, by] = vp.convertToViewportPoint(x1, y1)
+    await task.destroy()
+    const top = Math.min(ay, by), bottom = Math.max(ay, by)
+    return { x: +Math.min(ax, bx).toFixed(2), y: +(vp.height - bottom).toFixed(2), width: +Math.abs(bx - ax).toFixed(2), height: +Math.abs(bottom - top).toFixed(2), rotate: page.rotate }
+  }
+  for (const pageNo of [1, 2, 3, 4]) {
+    const out = join(T, `rot${pageNo}.pdf`)
+    // FreeText boxes are stored without stroke padding, so the /Rect can be compared exactly.
+    const r = cli('annotate.text', '--in', ROT, '--out', out, '--page', String(pageNo), '--rect', '72,72,100,50', '--content', 'box')
+    const back = await viewRect(out, pageNo - 1)
+    check(r.code === 0 && back.x === 72 && back.y === 72 && back.width === 100 && back.height === 50, `text box at view (72,72,100,50) lands there on a /Rotate ${back.rotate} page`)
+  }
+  // Images are flattened into the content stream (no /Annots to read back); the placement path is the one verified above.
+  const st = cli('annotate.stamp', '--in', ROT, '--out', join(T, 'stamp270.pdf'), '--page', '4', '--at', '400,40', '--width', '120', '--image', wide)
+  const sb = st.out.result.bounds
+  check(st.code === 0 && sb.x === 400 && sb.y === 40 && sb.width === 120 && sb.height === 60, 'a stamp at view (400,40) on a /Rotate 270 page reports a 120×60 view box there')
+  const f = cli('find', 'Table', '--in', ROT)
+  const b = f.out.result.matches.map((m: any) => m.bounds)
+  // "Table" is drawn at user-space (60, 680) on every page; where it *appears* depends on /Rotate. Expect find to report that view position.
+  const task = pdfjs.getDocument({ data: new Uint8Array(readFileSync(ROT)), verbosity: 0, useSystemFonts: false })
+  const rdoc = await task.promise
+  let allMatch = b.length === 4
+  for (let i = 0; i < 4; i++) {
+    const page = await rdoc.getPage(i + 1)
+    const vp = page.getViewport({ scale: 1 })
+    const [vx, vyTop] = vp.convertToViewportPoint(60, 680)
+    const expected = { x: vx, y: vp.height - vyTop }
+    // The run's start point maps to a different corner of its box on each rotation; it must lie inside the reported box.
+    const near = expected.x >= b[i].x - 2 && expected.x <= b[i].x + b[i].width + 2 && expected.y >= b[i].y - 2 && expected.y <= b[i].y + b[i].height + 2
+    if (!near) allMatch = false
+  }
+  await task.destroy()
+  check(f.code === 0 && allMatch, 'find reports "Table" where it appears on each /Rotate 0/90/180/270 page')
+  const hl = cli('annotate.highlight', '--in', ROT, '--out', join(T, 'hl270.pdf'), '--page', '4', '--text', 'Table')
+  const hb = await viewRect(join(T, 'hl270.pdf'), 3)
+  check(hl.code === 0 && Math.abs(hb.x - b[3].x) < 1 && Math.abs(hb.y - b[3].y) < 1, 'highlight by anchor on the /Rotate 270 page covers the found text')
+  const arrow = cli('annotate.arrow', '--in', ROT, '--out', join(T, 'ar270.pdf'), '--page', '4', '--from', '100,100', '--to', '300,100')
+  const ab = await viewRect(join(T, 'ar270.pdf'), 3)
+  check(arrow.code === 0 && ab.width > ab.height, 'a horizontal arrow on the /Rotate 270 page stays horizontal as displayed')
 }
 
 console.log('MCP: stdio handshake, tools/list, tools/call')

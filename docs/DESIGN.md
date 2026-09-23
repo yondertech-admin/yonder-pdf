@@ -463,12 +463,18 @@ outside and calls in. v1 of this design was reviewed by Codex/Astra
    that lists the candidates. `find` returns the same geometry with a
    `quality: 'exact' | 'estimated'` flag, so an agent can inspect, then edit.
    `--dry-run` resolves targets and reports warnings without writing.
-5. **1-based pages and hex colours at the boundary**, 0-based and normalised
-   internally. Rects are `x,y,w,h` in points, origin bottom-left, unrotated
-   page (the §4.1 model). Every input is validated against the command's JSON
-   Schema plus semantic checks (finite numbers, positive sizes, page in range,
-   colour format) before any writer runs. Responses are JSON when `--json` is
-   given (always for API/MCP).
+5. **1-based pages, hex colours and view-space coordinates at the boundary.**
+   Every coordinate a command takes or reports is in **view space**: the page
+   as displayed (after `/Rotate`, CropBox offset applied), origin bottom-left,
+   points — what a user sees in the app or in Preview. Rects are `x,y,w,h`.
+   The stored model stays unrotated user space (§4.1); `core/space.ts`
+   converts through the same pdf.js `PageViewport` the app uses (§12 #14).
+   Revised 2026-09-22: the first cut took unrotated coordinates and a
+   client's landscape scans with a `/Rotate 270` flag put stamps off the
+   table. Every input is validated against the command's JSON Schema plus
+   semantic checks (finite numbers, positive sizes, page in range, colour
+   format) before any writer runs. Responses are JSON when `--json` is given
+   (always for API/MCP).
 6. **Same writers, semantic parity.** The CLI calls the same `writeAnnotations`,
    page-ops and form code as the app, so output is semantically identical
    (same objects, appearances, geometry). Byte identity is *not* promised:
@@ -706,7 +712,7 @@ Full findings: `docs/REVIEW-05-automation-code-astra.md` (22 items, milestone A2
 | 4 | Outputs are published with a hard link (`EEXIST` closes the check-then-write race) unless `--overwrite`; `--in-place` re-hashes the input immediately before replacing it; same-file detection compares device+inode; `canonical()` only swallows `ENOENT`. |
 | 5 | Files open in the app: still not coordinated (needs the A3 socket). Documented limitation until then; `--in-place` remains explicit opt-in. |
 | 6 | Packaged pdf.js: the legacy build **and its worker** ship in `Resources/cli/pdfjs/`; the adapter resolves that path first and node_modules only in development. Verified from an unsigned packaged bundle. |
-| 7 | Automatic (display-sized) boxes for oriented annotations are swapped into user space on 90°/270° pages; explicit `--rect` is taken literally. |
+| 7 | Superseded the same day: all coordinates (inputs and outputs) are view space, converted through `ViewSpace` (`core/space.ts`); no size-swap special cases remain. |
 | 8 | Rotated/vertical text anchors: deferred; geometry stays `quality: 'estimated'` (axis-aligned). Tracked for Phase 3 with the annotation-import work. |
 | 9 | `forms.flatten` and `export.flatten` **materialise at their position** in a batch (bytes rewritten, consumed session annotations cleared, both engines reopened). |
 | 10 | Choice values are validated against options; combo boxes take one value, list boxes take several only when `multiSelect`; checkboxes accept booleans, `true/false/on/off` or the export value, anything else is `YP_INVALID_INPUT`; all assignments are validated before the storage is touched. |
@@ -730,7 +736,7 @@ Second pass (`docs/REVIEW-06-automation-code-astra-pass2.md`, 12 items, same day
 | 1 | Publication runs under a per-destination lock file (`O_EXCL`, 5 s wait, 60 s stale reclaim); replacing the input re-hashes it inside the lock right before the rename. |
 | 2 | The shim resolves its symlink chain before locating the bundle; the Linux runtime name matches electron-builder's executable (`yonder-pdf`). |
 | 3 | Multi-select list boxes read every selected value from the widget annotation (`fieldValue`), not pdf.js's first-value field object. |
-| 4 | Anchored `--align on` images keep their *display* aspect on rotated pages (ratio swapped for 90°/270°). |
+| 4 | Anchored `--align on` images are fitted in view space, so the display aspect holds on every rotation. |
 | 5 | Every failure path after the document is loaded runs through one `try/finally` that destroys it (guards and output planning included). |
 | 6 | An exclusive-link `EEXIST` maps to `YP_OUTPUT_EXISTS`; multi-file failures report `written[]` and `failedPath` in the error details. |
 | 7 | Images are decoded with pdf-lib in their own operation (`assertEmbeddable`), so a corrupt file fails with `failedIndex`; commit failures carry `stage: 'commit'`. |
@@ -739,3 +745,5 @@ Second pass (`docs/REVIEW-06-automation-code-astra-pass2.md`, 12 items, same day
 | 10 | Global booleans are validated once, up front, inside the structured error handler; `--help=false` is false. |
 | 11 | `npm run test:unit` builds the CLI first. |
 | 12 | Tests added: multi-select readback, 2:1 image on a rotated page (at + anchored), corrupt image attribution, deterministic extract dates, meta booleans, canonical split paths, MCP string-valued boolean rejection. Still open: publication race tests, installed-symlink invocation, rendered-content checks for flattening. |
+
+Coordinate-space revision (2026-09-22, after a client's `/Rotate 270` scans): view space everywhere; `test-fixtures/rotated.pdf` (0/90/180/270) with tests that convert stored `/Rect`s back through pdf.js independently of the CLI.

@@ -45,7 +45,7 @@ Diagnostics while developing (unpackaged only): `YONDER_DEBUG=1` mirrors rendere
 
 ## Command line and agents
 
-The same engine runs headlessly. Every command prints JSON; pages are 1-based, coordinates are PDF points (origin bottom-left), colours are hex. Placement commands accept a **text anchor** so an agent never needs coordinates:
+The same engine runs headlessly. Every command prints JSON; pages are 1-based, coordinates are points in the page **as displayed** (origin bottom-left, rotation flags already applied, so scans with `/Rotate 270` behave like what you see), colours are hex. Placement commands accept a **text anchor** so an agent never needs coordinates:
 
 ```bash
 npm run build:cli                                   # → out/cli (packaged builds ship it as `yonder-pdf`)
