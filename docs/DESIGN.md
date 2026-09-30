@@ -747,3 +747,70 @@ Second pass (`docs/REVIEW-06-automation-code-astra-pass2.md`, 12 items, same day
 | 12 | Tests added: multi-select readback, 2:1 image on a rotated page (at + anchored), corrupt image attribution, deterministic extract dates, meta booleans, canonical split paths, MCP string-valued boolean rejection. Still open: publication race tests, installed-symlink invocation, rendered-content checks for flattening. |
 
 Coordinate-space revision (2026-09-22, after a client's `/Rotate 270` scans): view space everywhere; `test-fixtures/rotated.pdf` (0/90/180/270) with tests that convert stored `/Rect`s back through pdf.js independently of the CLI.
+
+## 17. Stamps (design, 2026-09-30)
+
+Reference: PDF Expert's *Annotate ▸ Stamp* — a panel of standard stamps, custom
+text stamps (optionally with the user's name and the date), custom image
+stamps, all kept in a small library and placed with one click.
+
+**Model.** A new annotation kind, stored like every other in unrotated user
+space and oriented like text boxes:
+
+```ts
+{ kind: 'stamp'; rect; label: string; sublabel?: string; color: string; opacity: number; preset?: string; rotate: number }
+```
+
+Image stamps stay what they already are: an `image` annotation with
+`role: 'stamp'` (drawn into the page on save).
+
+**PDF output.** A text stamp is a real `/Subtype /Stamp` annotation with a
+generated appearance stream (rounded border, light tint, Helvetica-Bold label,
+optional Helvetica second line) so Acrobat, Preview and Chrome show it
+identically and it stays movable there. Presets that match the PDF standard
+icon names carry them in `/Name` (`/Approved`, `/Draft`, `/Confidential`, …);
+everything else uses `/Name /Custom` plus `/Contents`. Flatten draws the same
+appearance into the page content. One layout function (`core/stamps.ts`,
+`stampLayout`) sizes the text for both the writer (pdf-lib font metrics) and
+the on-screen overlay (canvas metrics), so what is placed is what is saved.
+
+**Standard set.** Approved, Not Approved, Draft, Final, Completed,
+Confidential, For Public Release, Not For Public Release, For Comment, Void,
+Preliminary Results, Information Only, Rejected, Paid; dynamic ones that add
+"name · date" on a second line — Received, Reviewed, Revised; and the
+sign-flow markers Sign Here, Initial Here, Witness.
+
+**Library.** Custom stamps live in the settings file next to saved signatures
+(`stamps: SavedStamp[]`, text or image, capped at 40; image data URLs ≤ 1.5 MB,
+PNG/JPEG only). IPC: `stamps:list/add/remove`, guarded like the signature
+handlers. No document content is involved.
+
+**UI.** Toolbar *Stamp* button and *Sign ▸ Stamp…* open a dialog with two
+tabs. *Standard*: a grid of previews; click one, then click the page to place
+it (a ghost follows the pointer; the stamp is centred on the click and
+selected for resizing). *Custom*: saved stamps (click to place, × to delete)
+and a form — text, colour, "add my name", "add date", live preview, "save to
+library" — plus "From image…". Placed stamps move, resize, recolour (colour and
+opacity in the properties bar), undo/redo and appear in the Notes sidebar like
+any annotation.
+
+**Automation (§14).** `annotate.stamp` takes `--preset <id>`, or `--label`
+(`--sublabel`, `--with-name` from `--author`, `--with-date`, `--color`,
+`--opacity`), or `--image` / `--saved <id>`; placement and coordinates as every
+other command (view space, anchors). `stamps.list` returns the presets and the
+saved library. `annotations.update` can recolour and relabel a session stamp.
+
+Stamp code review (Codex / GPT-6 Astra, `docs/REVIEW-07-stamps-astra.md`, 10 items, no PDF-validity defect found):
+
+| # | Decision |
+|---|---|
+| 1 | Image stamps are validated in main before they are stored: strict base64 data URL, header check, 64 MP ceiling, must decode (pdf-lib), and width/height are taken from the bytes, never from the caller. |
+| 2 | The dialog checks the image header and pixel ceiling before decoding and closes the bitmap afterwards. |
+| 3 | One `placeImage` implementation for files, saved signatures and saved image stamps (same aspect fitting and validation). |
+| 4 | Relabelling a stamp uses the creation rules (non-empty, ≤ 60 characters, no truncation) and drops the preset, so `/Name` never contradicts the text. |
+| 5 | Preview and writer share `stampDisplayText`; unsupported characters show as "?" while composing, with a note in the dialog. |
+| 6 | The layout scales every dimension with the box and the appearance clips to it; stamps smaller than 24×12 pt are refused by the CLI. |
+| 7 | Library entries pass one shared validator (`validSavedStamp`) when read by the app and by the CLI; malformed entries are ignored. |
+| 8 | Tests assert the appearance operators, font resources, colour, BBox, flatten XObject, relabel/empty/tiny/conflict cases and a malformed library; the e2e scenario asserts recolour, move, resize, undo/redo and Shift-click. Raster comparisons across rotations remain open (no headless renderer yet). |
+| 9 | Exactly one stamp source per command; text options on image stamps are usage errors. |
+| 10 | Shift-click keeps the stamp armed to place several; Esc disarms. |

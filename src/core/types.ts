@@ -87,6 +87,19 @@ export interface ImageAnnotation extends Base, Oriented {
   role: 'signature' | 'initials' | 'stamp' | 'image'
 }
 
+/** A text stamp ("APPROVED"), written as a /Stamp annotation with its own appearance. */
+export interface StampAnnotation extends Base, Oriented {
+  kind: 'stamp'
+  rect: Rect
+  label: string
+  /** Second line, e.g. "Ada Lovelace · Sep 30, 2026". */
+  sublabel?: string
+  color: string
+  opacity: number
+  /** Id of the standard stamp it came from (core/stamps.ts), if any. */
+  preset?: string
+}
+
 export type Annotation =
   | MarkupAnnotation
   | InkAnnotation
@@ -95,6 +108,7 @@ export type Annotation =
   | TextAnnotation
   | NoteAnnotation
   | ImageAnnotation
+  | StampAnnotation
 
 export type AnnotationKind = Annotation['kind']
 
@@ -116,7 +130,8 @@ export type Tool =
   | 'arrow'
   | 'text'
   | 'note'
-  | 'image' // placing a signature / initials / stamp
+  | 'image' // placing a signature / initials / image stamp
+  | 'stamp' // placing a text stamp
 
 export interface ToolStyle {
   color: string
@@ -167,6 +182,7 @@ export function boundsOf(a: Annotation): Rect {
     case 'ellipse':
     case 'text':
     case 'image':
+    case 'stamp':
       return { ...a.rect }
     case 'line':
     case 'arrow': {
@@ -195,11 +211,27 @@ export function arrowHeadPoints(from: Point, to: Point, width: number): Point[] 
   ]
 }
 
+/** True when every character can be written with the built-in WinAnsi fonts (Helvetica). */
+export function isWinAnsi(text: string): boolean {
+  for (const ch of text) {
+    const c = ch.codePointAt(0) ?? 0
+    if (!(ch === '\n' || ch === '\t' || (c >= 32 && c <= 126) || (c >= 160 && c <= 255) || '€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ'.includes(ch))) return false
+  }
+  return true
+}
+
+/** Replace characters the built-in fonts cannot write with '?' (what the PDF writer does). */
+export function sanitizeForWinAnsi(text: string): string {
+  let out = ''
+  for (const ch of text) out += isWinAnsi(ch) ? ch : '?'
+  return out
+}
+
 /** Characters outside WinAnsi are written as '?' in FreeText appearances (Helvetica). */
 export function hasUnsupportedText(list: Annotation[]): boolean {
   for (const a of list) {
-    if (a.kind !== 'text') continue
-    for (const ch of a.text) {
+    if (a.kind !== 'text' && a.kind !== 'stamp') continue
+    for (const ch of a.kind === 'text' ? a.text : a.label + (a.sublabel ?? '')) {
       const c = ch.codePointAt(0) ?? 0
       if (!(ch === '\n' || ch === '\t' || (c >= 32 && c <= 126) || (c >= 160 && c <= 255) || '€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ'.includes(ch))) return true
     }
@@ -222,6 +254,7 @@ export function translate<T extends Annotation>(a: T, dx: number, dy: number): T
     case 'ellipse':
     case 'text':
     case 'image':
+    case 'stamp':
       return { ...a, rect: { ...a.rect, x: a.rect.x + dx, y: a.rect.y + dy } }
     case 'line':
     case 'arrow':
@@ -232,7 +265,7 @@ export function translate<T extends Annotation>(a: T, dx: number, dy: number): T
 }
 
 export function canResize(a: Annotation): boolean {
-  return a.kind === 'rect' || a.kind === 'ellipse' || a.kind === 'text' || a.kind === 'image'
+  return a.kind === 'rect' || a.kind === 'ellipse' || a.kind === 'text' || a.kind === 'image' || a.kind === 'stamp'
 }
 
 export function normalizeRect(a: Point, b: Point): Rect {
@@ -269,5 +302,6 @@ export const KIND_LABEL: Record<AnnotationKind, string> = {
   arrow: 'Arrow',
   text: 'Text',
   note: 'Note',
-  image: 'Image'
+  image: 'Image',
+  stamp: 'Stamp'
 }

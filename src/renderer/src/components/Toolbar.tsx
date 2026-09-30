@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import {
+  Stamp,
   ArrowRight,
   Circle,
   FolderOpen,
@@ -183,6 +184,12 @@ export function Toolbar(): ReactNode {
             </button>
           </div>
         )}
+      </div>
+      <div className="group">
+        <button className={'tbtn' + (s.tool === 'stamp' ? ' active' : '')} title="Stamp (⇧⌘M)" disabled={!canEdit} onClick={() => s.setDialog({ type: 'stamp' })}>
+          <Stamp />
+          <span>Stamp</span>
+        </button>
       </div>
       <span className="spacer" />
       <div className="group">

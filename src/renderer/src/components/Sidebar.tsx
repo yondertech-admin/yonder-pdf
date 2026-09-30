@@ -253,6 +253,7 @@ function AnnotationList({ doc }: { doc: Doc }): ReactNode {
   const describe = (a: Annotation): string => {
     if ('text' in a && a.text) return a.text
     if (a.kind === 'image') return a.role
+    if (a.kind === 'stamp') return a.sublabel ? `${a.label} — ${a.sublabel}` : a.label
     return ''
   }
   return (

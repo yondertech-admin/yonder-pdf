@@ -7,7 +7,8 @@ import { YonderError } from '../errors'
 import { assertEmbeddable, fitWidth, imageInfo, toDataUrl } from '../images'
 import { s, type Schema } from '../schema'
 import { roundRect } from '../space'
-import { NOTE_ICON_SIZE, boundsOf, type Annotation, type NewAnnotation, type Rect } from '../types'
+import { MAX_STAMP_SUBLABEL, MIN_STAMP_HEIGHT, MIN_STAMP_WIDTH, STAMP_PRESETS, defaultStampSize, findPreset, normalizeStampLabel, stampSublabel } from '../stamps'
+import { NOTE_ICON_SIZE, boundsOf, isWinAnsi, type Annotation, type NewAnnotation, type Rect } from '../types'
 import { parseColor, parseOpacity, parsePage, parsePaths, parsePoint, parsePositive, parseQuads, parseRect } from '../validate'
 import { requireDoc, type Command, type CommandContext, type Outcome, type Params } from './context'
 
@@ -153,7 +154,7 @@ export const textBox: Command = {
     const place = await placeBox(ctx, p, { size: { width, height: fontSize * 1.2 + 6 }, explicit: true }, 'below')
     const content = String(p.content)
     const a = await add(ctx, { kind: 'text', page: place.page, rect: place.rect, text: content, fontSize, color: parseColor((p.color as string | undefined) ?? '#1a1a1a'), rotate: await requireDoc(ctx).pageRotate(place.page) })
-    const warnings = /[^\x00-\xff]/.test(content) ? ['Some characters are outside WinAnsi and will render as "?" (Unicode text boxes are planned).'] : []
+    const warnings = isWinAnsi(content) ? [] : ['Some characters are outside WinAnsi and will render as "?" (Unicode text boxes are planned).']
     return created(ctx, a, { ...(place.anchor ? { anchor: place.anchor } : {}), ...(warnings.length ? { warnings } : {}) })
   }
 }
@@ -309,18 +310,24 @@ function imageLike(name: string, role: 'image' | 'stamp' | 'signature' | 'initia
         await assertEmbeddable(bytes, info)
         dataUrl = toDataUrl(bytes, info.mime)
       } else throw new YonderError('YP_USAGE', 'Give --image <png|jpg> or --saved <id>')
-      const explicitWidth = p.width !== undefined
-      const width = explicitWidth ? parsePositive(p.width as number, 'width', 5000) : defaultWidth
-      const place = await placeBox(ctx, p, { size: fitWidth(info, width), explicit: explicitWidth }, role === 'signature' || role === 'initials' ? 'right' : 'below')
-      let rect = place.rect
-      if (p.rect === undefined && p.align === 'on' && !explicitWidth && place.anchor) {
-        // Keep the image's aspect inside the anchor box (all in view space).
-        rect = (await requireDoc(ctx).viewSpace(place.page)).rectToUser(fitInside(place.view, info))
-      }
-      const a = await add(ctx, { kind: 'image', page: place.page, rect, dataUrl, role, rotate: await requireDoc(ctx).pageRotate(place.page) })
-      return created(ctx, a, { image: { width: info.width, height: info.height, mime: info.mime }, ...(place.anchor ? { anchor: place.anchor } : {}) })
+      return placeImage(ctx, p, { dataUrl, info }, role, defaultWidth)
     }
   }
+}
+
+/** Place an already validated image (file, saved signature or saved stamp): one implementation for every source (REVIEW-07 #3). */
+async function placeImage(ctx: CommandContext, p: Params, src: { dataUrl: string; info: { width: number; height: number; mime: 'image/png' | 'image/jpeg' } }, role: 'image' | 'stamp' | 'signature' | 'initials', defaultWidth: number, extra: Record<string, unknown> = {}): Promise<Outcome> {
+  const { dataUrl, info } = src
+  const explicitWidth = p.width !== undefined
+  const width = explicitWidth ? parsePositive(p.width as number, 'width', 5000) : defaultWidth
+  const place = await placeBox(ctx, p, { size: fitWidth(info, width), explicit: explicitWidth }, role === 'signature' || role === 'initials' ? 'right' : 'below')
+  let rect = place.rect
+  if (p.rect === undefined && p.align === 'on' && !explicitWidth && place.anchor) {
+    // Keep the image's aspect inside the anchor box (all in view space).
+    rect = (await requireDoc(ctx).viewSpace(place.page)).rectToUser(fitInside(place.view, info))
+  }
+  const a = await add(ctx, { kind: 'image', page: place.page, rect, dataUrl, role, rotate: await requireDoc(ctx).pageRotate(place.page) })
+  return created(ctx, a, { image: { width: info.width, height: info.height, mime: info.mime }, ...extra, ...(place.anchor ? { anchor: place.anchor } : {}) })
 }
 
 function fitInside(box: Rect, info: { width: number; height: number }): Rect {
@@ -373,6 +380,136 @@ export const date: Command = {
   }
 }
 
+const imageStamp = imageLike('stamp', 'stamp', 'image stamp')
+
+const dateText = (ctx: CommandContext): string => new Date(ctx.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: ctx.deterministic ? 'UTC' : undefined })
+
+export const stamp: Command = {
+  name: 'annotate.stamp',
+  group: 'annotate',
+  description:
+    'Place a stamp. Standard: --preset approved|not-approved|draft|final|completed|confidential|for-public-release|not-for-public-release|for-comment|void|preliminary-results|information-only|rejected|paid|received|reviewed|revised|sign-here|initial-here|witness. Custom text: --label "TEXT" (--color, --sublabel, --with-name uses --author, --with-date). Image: --image file. From the app library: --saved <id> (see stamps.list). Text stamps are real /Stamp annotations; image stamps are drawn into the page.',
+  scope: 'both',
+  needsDoc: true,
+  produces: 'document',
+  params: s.obj({
+    preset: s.str('Standard stamp id (see stamps.list)'),
+    label: s.str('Custom stamp text'),
+    sublabel: s.str('Second line (overrides --with-name/--with-date)'),
+    withName: s.bool('Add the --author name on the second line'),
+    withDate: s.bool("Add today's date on the second line"),
+    color: s.str('Colour, hex (default: the preset colour, or #cf222e)'),
+    opacity: opacityParam,
+    image: s.str('PNG or JPEG file to use as an image stamp'),
+    saved: s.str('Id of a stamp saved in the app library'),
+    page: pageParam,
+    rect: s.str('Box "x,y,width,height" (the stamp is scaled to it)'),
+    at: s.str('Bottom-left corner "x,y"'),
+    width: s.num('Width in points (height follows the stamp proportions)', { exclusiveMinimum: 0 }),
+    text: anchorParams.text,
+    occurrence: anchorParams.occurrence,
+    align: anchorParams.align,
+    offset: anchorParams.offset
+  }),
+  examples: [
+    'yonder-pdf annotate.stamp --in a.pdf --out b.pdf --preset approved --page 1 --at 400,700',
+    'yonder-pdf annotate.stamp --in a.pdf --out b.pdf --label "RECEIVED" --with-date --author "Ada Lovelace" --with-name --text "Invoice" --align right',
+    'yonder-pdf annotate.stamp --in a.pdf --out b.pdf --image company-seal.png --page 1 --at 60,60 --width 120'
+  ],
+  async run(ctx, p): Promise<Outcome> {
+    let label: string | undefined
+    let color = '#cf222e'
+    let presetId: string | undefined
+    let dynamic = false
+    let withName = Boolean(p.withName)
+    let withDate = Boolean(p.withDate)
+    // One source only; text styling does not apply to image stamps (REVIEW-07 #9).
+    const sources = ['preset', 'image', 'saved'].filter((k) => p[k] !== undefined)
+    if (sources.length > 1) throw new YonderError('YP_USAGE', `Give only one of --preset, --image or --saved (got ${sources.map((k) => '--' + k).join(', ')})`)
+    const textOnly = ['label', 'sublabel', 'withName', 'withDate', 'color', 'opacity'].filter((k) => p[k] !== undefined)
+    if (p.image !== undefined) {
+      if (textOnly.length) throw new YonderError('YP_USAGE', `${textOnly.map((k) => '--' + k.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase())).join(', ')} only apply to text stamps, not to --image`)
+      return imageStamp.run(ctx, p)
+    }
+    if (p.saved !== undefined) {
+      if (!ctx.savedStamps) throw new YonderError('YP_UNSUPPORTED', 'The stamp library is not reachable here')
+      const hit = (await ctx.savedStamps()).find((x) => x.id === p.saved)
+      if (!hit) throw new YonderError('YP_NOT_FOUND', `No saved stamp with id ${p.saved}`, 'Run stamps.list to see the ids.')
+      if (hit.type === 'image') {
+        if (textOnly.length) throw new YonderError('YP_USAGE', 'That saved stamp is an image; text options do not apply to it')
+        const m = hit.dataUrl.match(/^data:(image\/(?:png|jpeg));base64,(.*)$/)
+        if (!m) throw new YonderError('YP_INVALID_INPUT', 'The saved stamp image is not a PNG or JPEG')
+        // Same validation as a file: real dimensions from the bytes, and it must decode.
+        const bin = atob(m[2])
+        const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        const info = imageInfo(bytes)
+        await assertEmbeddable(bytes, info)
+        return placeImage(ctx, p, { dataUrl: hit.dataUrl, info }, 'stamp', 200, { saved: hit.id })
+      }
+      label = hit.label
+      color = hit.color
+      withName = withName || hit.withName
+      withDate = withDate || hit.withDate
+    } else if (p.preset !== undefined) {
+      const preset = findPreset(String(p.preset))
+      if (!preset) throw new YonderError('YP_INVALID_INPUT', `Unknown stamp preset "${p.preset}"`, `Presets: ${STAMP_PRESETS.map((x) => x.id).join(', ')}`)
+      label = preset.label
+      color = preset.color
+      presetId = preset.id
+      dynamic = Boolean(preset.dynamic)
+    }
+    if (p.label !== undefined) {
+      try {
+        label = normalizeStampLabel(String(p.label))
+      } catch (err) {
+        throw new YonderError('YP_INVALID_INPUT', err instanceof Error ? err.message : String(err))
+      }
+      presetId = undefined
+    }
+    if (!label) throw new YonderError('YP_USAGE', 'Give --preset <id>, --label "TEXT", --image <file> or --saved <id>')
+    if (p.color !== undefined) color = parseColor(String(p.color))
+    const warnings: string[] = []
+    let sublabel: string | undefined
+    if (p.sublabel !== undefined) sublabel = String(p.sublabel).trim() || undefined
+    else {
+      const wantName = withName || dynamic
+      const wantDate = withDate || dynamic
+      if (withName && !ctx.author) warnings.push('--with-name needs --author; the name was left out.')
+      sublabel = stampSublabel({ name: wantName ? ctx.author : undefined, date: wantDate ? dateText(ctx) : undefined })
+    }
+    if (sublabel && sublabel.length > MAX_STAMP_SUBLABEL) throw new YonderError('YP_INVALID_INPUT', `The second line is limited to ${MAX_STAMP_SUBLABEL} characters`)
+    if (!isWinAnsi(label + (sublabel ?? ''))) warnings.push('Some characters are outside WinAnsi and will render as "?".')
+    const natural = defaultStampSize(label, sublabel)
+    const explicitWidth = p.width !== undefined
+    const size = explicitWidth ? { width: parsePositive(p.width as number, 'width', 5000), height: (parsePositive(p.width as number, 'width', 5000) * natural.height) / natural.width } : natural
+    const place = await placeBox(ctx, p, { size, explicit: true }, 'below')
+    if (place.view.width < MIN_STAMP_WIDTH || place.view.height < MIN_STAMP_HEIGHT) throw new YonderError('YP_INVALID_INPUT', `A stamp needs at least ${MIN_STAMP_WIDTH}×${MIN_STAMP_HEIGHT} points (got ${+place.view.width.toFixed(1)}×${+place.view.height.toFixed(1)})`)
+    const a = await add(ctx, { kind: 'stamp', page: place.page, rect: place.rect, label, ...(sublabel ? { sublabel } : {}), color, opacity: p.opacity === undefined ? 1 : parseOpacity(p.opacity as number), ...(presetId ? { preset: presetId } : {}), rotate: await requireDoc(ctx).pageRotate(place.page) })
+    return created(ctx, a, { label, ...(sublabel ? { sublabel } : {}), ...(presetId ? { preset: presetId } : {}), ...(place.anchor ? { anchor: place.anchor } : {}), ...(warnings.length ? { warnings } : {}) })
+  }
+}
+
+export const stampsList: Command = {
+  name: 'stamps.list',
+  group: 'annotate',
+  description: 'List the standard stamp presets and the custom stamps saved in the Yonder PDF app (use with annotate.stamp --preset <id> or --saved <id>).',
+  scope: 'both',
+  needsDoc: false,
+  produces: 'none',
+  params: s.obj({}),
+  examples: ['yonder-pdf stamps.list --json'],
+  async run(ctx): Promise<Outcome> {
+    const saved = ctx.savedStamps ? await ctx.savedStamps() : []
+    return {
+      result: {
+        presets: STAMP_PRESETS.map((x) => ({ id: x.id, label: x.label, color: x.color, ...(x.dynamic ? { addsNameAndDate: true } : {}) })),
+        saved: saved.map((x) => (x.type === 'text' ? { id: x.id, type: x.type, label: x.label, color: x.color, withName: x.withName, withDate: x.withDate } : { id: x.id, type: x.type, width: x.width, height: x.height }))
+      }
+    }
+  }
+}
+
 export const signaturesList: Command = {
   name: 'signatures.list',
   group: 'annotate',
@@ -400,9 +537,10 @@ export const annotateCommands: Command[] = [
   lineLike('arrow'),
   ink,
   imageLike('image', 'image', 'Place a PNG/JPEG image.'),
-  imageLike('stamp', 'stamp', 'Place an image as a stamp.'),
+  stamp,
   imageLike('sign', 'signature', 'Place a signature image (--image file or --saved id; visual signing, flattened into the page on save). Typed signatures need the app.'),
   imageLike('initial', 'initials', 'Place an initials image (--image file or --saved id; visual signing, flattened on save).'),
   date,
-  signaturesList
+  signaturesList,
+  stampsList
 ]

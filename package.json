@@ -19,7 +19,7 @@
     "dist:win": "npm run build && electron-builder --win",
     "dist:linux": "npm run build && electron-builder --linux",
     "postinstall": "node scripts/copy-pdfjs-assets.mjs",
-    "e2e": "node scripts/e2e/cdp.mjs scripts/e2e/annotate.mjs && node scripts/e2e/cdp.mjs scripts/e2e/pages.mjs && node scripts/e2e/cdp.mjs scripts/e2e/reopen.mjs e2e-out/saved.pdf && node scripts/e2e/cdp.mjs scripts/e2e/ads.mjs",
+    "e2e": "node scripts/e2e/cdp.mjs scripts/e2e/annotate.mjs && node scripts/e2e/cdp.mjs scripts/e2e/pages.mjs && node scripts/e2e/cdp.mjs scripts/e2e/reopen.mjs e2e-out/saved.pdf && node scripts/e2e/cdp.mjs scripts/e2e/stamp.mjs && node scripts/e2e/cdp.mjs scripts/e2e/reopen-stamps.mjs e2e-out/stamped.pdf && node scripts/e2e/cdp.mjs scripts/e2e/ads.mjs",
     "fixture": "node scripts/make-fixture.mjs",
     "test:unit": "npm run build:cli && node --experimental-strip-types --no-warnings scripts/unit/pageops.test.mts && node --experimental-strip-types --no-warnings scripts/unit/cli.test.mts",
     "fixture:forms": "node scripts/make-fixture-forms.mjs",

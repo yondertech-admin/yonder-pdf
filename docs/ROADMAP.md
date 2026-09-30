@@ -13,8 +13,11 @@ Known limitations:
 ## Automation surface — CLI, local API, MCP (0.1.x → 0.2)
 Per DESIGN.md §14: every feature reachable headlessly through `yonder-pdf` (CLI), a token-protected local socket API in the running app, and an MCP server, so agents such as Claude Code can inspect and edit PDFs with the app. Milestones A1–A4. From here on, every new feature ships with a registry command, not only UI.
 
+## Stamps (0.1.x)
+Per DESIGN.md §17: standard and custom text stamps as real `/Stamp` annotations, image stamps, a saved library, and the same through `annotate.stamp` / `stamps.list`.
+
 ## Phase 2 — E-signature workflows (0.2)
 Per DESIGN.md §7 + §12: incremental-update writer, PAdES-B-B certificate signatures (self-signed or `.p12`), recipients & fields, guided signing, audit trail with signed manifest, completion certificate, macOS Share sheet for sending, verification panel.
 
 ## Phase 3 — Pro tools (0.3+)
-Edit existing annotations, redaction (true content removal), OCR (offline), compress, password protect/unlock, compare, stamps, measurements, bookmark editing, limited text editing, PDF/A, image → PDF, batch, crash-recovery journal.
+Edit existing annotations, redaction (true content removal), OCR (offline), compress, password protect/unlock, compare, measurements, bookmark editing, limited text editing, PDF/A, image → PDF, batch, crash-recovery journal.

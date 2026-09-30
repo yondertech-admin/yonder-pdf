@@ -5,7 +5,8 @@ import { s } from '../schema'
 import { extractText, searchDocument } from '../text'
 import { rectToQuad } from '../text'
 import { roundRect } from '../space'
-import { boundsOf, translate, type Annotation } from '../types'
+import { normalizeStampLabel } from '../stamps'
+import { boundsOf, isWinAnsi, translate, type Annotation } from '../types'
 import { parseColor, parseOpacity, parsePage, parsePoint, parsePositive, parseRect } from '../validate'
 import { requireDoc, sha256Hex, type Command, type Outcome } from './context'
 
@@ -233,6 +234,8 @@ function summary(a: Annotation): Record<string, unknown> {
       return { text: a.text, color: a.color }
     case 'image':
       return { role: a.role }
+    case 'stamp':
+      return { label: a.label, sublabel: a.sublabel, color: a.color, opacity: a.opacity, preset: a.preset }
     case 'highlight':
     case 'underline':
     case 'strikeout':
@@ -256,13 +259,14 @@ const STYLE_KEYS: Record<string, string[]> = {
   arrow: ['color', 'width', 'opacity'],
   text: ['text', 'fontSize', 'color'],
   note: ['text', 'color'],
-  image: []
+  image: [],
+  stamp: ['text', 'color', 'opacity']
 }
 
 export const annotationsUpdate: Command = {
   name: 'annotations.update',
   group: 'document',
-  description: 'Change a session annotation: restyle (--color/--fill/--width/--opacity), edit text (--text/--font-size), move it (--move dx,dy) or set its box (--rect).',
+  description: 'Change a session annotation: restyle (--color/--fill/--width/--opacity), edit text (--text/--font-size; for a stamp, --text is its label), move it (--move dx,dy) or set its box (--rect).',
   scope: 'both',
   needsDoc: true,
   produces: 'document',
@@ -276,7 +280,7 @@ export const annotationsUpdate: Command = {
       text: s.str('New text (text box / note)'),
       fontSize: s.num('Font size in points', { exclusiveMinimum: 0 }),
       move: s.str('Offset "dx,dy" in points (view space)'),
-      rect: s.str('New box "x,y,width,height" in view space (text, image, rect, ellipse)')
+      rect: s.str('New box "x,y,width,height" in view space (text, image, stamp, rect, ellipse)')
     },
     ['id']
   ),
@@ -308,8 +312,16 @@ export const annotationsUpdate: Command = {
           patch.fontSize = parsePositive(p.fontSize as number, 'fontSize', 400)
           break
         case 'text':
-          patch.text = String(p.text)
-          if (a.kind === 'text' && /[^\x00-\xff]/.test(String(p.text))) warnings.push('Some characters are outside WinAnsi and will render as "?".')
+          // A stamp's text is its label: same rules as creation, and a changed label is no longer the preset (REVIEW-07 #4).
+          if (a.kind === 'stamp') {
+            try {
+              patch.label = normalizeStampLabel(String(p.text))
+            } catch (err) {
+              throw new YonderError('YP_INVALID_INPUT', err instanceof Error ? err.message : String(err))
+            }
+            if (patch.label !== a.label) patch.preset = undefined
+          } else patch.text = String(p.text)
+          if ((a.kind === 'text' || a.kind === 'stamp') && !isWinAnsi(String(p.text))) warnings.push('Some characters are outside WinAnsi and will render as "?".')
           break
       }
     }

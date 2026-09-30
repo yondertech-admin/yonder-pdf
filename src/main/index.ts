@@ -15,6 +15,9 @@ let pendingOpen: string[] = []
 let rendererReady = false
 let closeConfirmed = false
 
+// An isolated profile for tests and side-by-side development (also read by the CLI, src/node/appdata.ts).
+if (process.env['YONDER_USER_DATA']) app.setPath('userData', process.env['YONDER_USER_DATA'])
+
 // Single instance: a second launch forwards its file arguments to us.
 if (!app.requestSingleInstanceLock()) {
   app.quit()

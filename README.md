@@ -9,6 +9,7 @@ Free, open-source PDF viewer and editor for macOS, Windows and Linux. View, anno
 - **View**: continuous scroll, fit width / fit page / zoom, rotate, thumbnails, outline, text selection, find in document, dark & light themes, links, tabs for several documents
 - **Annotate**: highlight, underline, strikethrough, pen, rectangle, ellipse, line, arrow, text box, sticky note; move, resize, recolour, delete; undo / redo
 - **Sign**: draw, type (bundled handwriting fonts) or upload an image; saved signatures and initials; add today's date. Signatures are flattened into the page on save. *Visual signing only – certificate-based digital signatures are planned.*
+- **Stamps**: twenty standard stamps (Approved, Draft, Confidential, Paid, Sign Here…), dynamic ones that add your name and the date, custom text stamps in any colour, image stamps, and a saved library. Text stamps are real PDF stamp annotations, so other viewers show and move them too
 - **Forms**: fill AcroForm fields (text, checkbox, radio, choice); values are saved
 - **Pages**: rotate, reorder (drag thumbnails), delete, insert blank, insert from another PDF, extract, split, merge
 - **Output**: save / save as (annotations are real PDF annotations with appearance streams, readable by Acrobat, Preview, Chrome…), flatten, export pages as PNG, print
@@ -53,6 +54,7 @@ node out/cli/index.mjs info --in report.pdf
 node out/cli/index.mjs find "Total due" --in invoice.pdf
 node out/cli/index.mjs annotate.highlight --in invoice.pdf --out marked.pdf --text "Total due"
 node out/cli/index.mjs annotate.text --in a.pdf --out b.pdf --text "Signature:" --align right --content "Ada Lovelace"
+node out/cli/index.mjs annotate.stamp --in a.pdf --out b.pdf --preset approved --page 1 --at 400,700
 node out/cli/index.mjs forms.fill --in form.pdf --out filled.pdf --set name="Ada" --set agree=true
 node out/cli/index.mjs pages.rotate --in a.pdf --in-place --pages 2-3 --by 90
 node out/cli/index.mjs apply --in a.pdf --out b.pdf --ops '[{"command":"annotate.highlight","params":{"text":"Total"}},{"command":"pages.delete","params":{"pages":"4"}}]'

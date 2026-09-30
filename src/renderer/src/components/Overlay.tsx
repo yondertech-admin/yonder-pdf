@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { MessageSquare } from 'lucide-react'
 import type { PageViewport } from '@/pdf/pdfjs'
+import { StampGraphic } from './StampGraphic'
 import { useStore, type Doc } from '@/store/app'
 import { arrowHeadPoints } from '@core/types'
 import { defaultPlacement } from '@/pdf/signature'
@@ -39,6 +40,7 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
   const tool = useStore((s) => s.tool)
   const style = useStore((s) => s.style)
   const pendingImage = useStore((s) => s.pendingImage)
+  const pendingStamp = useStore((s) => s.pendingStamp)
   const find = useStore((s) => s.find)
   // Actions are stable references; read them once (zustand v5 requires stable selector snapshots).
   const actions = useRef({
@@ -46,6 +48,7 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
     update: useStore.getState().updateAnnotation,
     select: useStore.getState().select,
     setPendingImage: useStore.getState().setPendingImage,
+    setPendingStamp: useStore.getState().setPendingStamp,
     setDialog: useStore.getState().setDialog,
     setTool: useStore.getState().setTool,
     remove: useStore.getState().removeAnnotations
@@ -117,12 +120,20 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
       actions.add({ id, page: index, createdAt: Date.now(), kind: 'image', rect: r, dataUrl: pendingImage.dataUrl, role: pendingImage.role, rotate: pageRotate })
       actions.setPendingImage(null)
       actions.select([id])
+    } else if (tool === 'stamp' && pendingStamp) {
+      // Centre the stamp on the click, upright for the current view (like signatures).
+      const sw = (doc.rotation % 180 ? pendingStamp.height : pendingStamp.width) * z
+      const sh = (doc.rotation % 180 ? pendingStamp.width : pendingStamp.height) * z
+      const r = vToRect({ x: p.x - sw / 2, y: p.y - sh / 2, w: sw, h: sh })
+      actions.add({ id: newId(), page: index, createdAt: Date.now(), kind: 'stamp', rect: r, label: pendingStamp.label, ...(pendingStamp.sublabel ? { sublabel: pendingStamp.sublabel } : {}), color: pendingStamp.color, opacity: 1, ...(pendingStamp.preset ? { preset: pendingStamp.preset } : {}), rotate: pageRotate })
+      // Shift-click keeps the stamp armed for the next page or spot (Esc to stop).
+      if (!e.shiftKey) actions.setPendingStamp(null)
     }
   }
 
   const onPointerMove = (e: React.PointerEvent): void => {
     const g = gesture.current
-    if (tool === 'image') setHover(local(e))
+    if (tool === 'image' || tool === 'stamp') setHover(local(e))
     if (!g) return
     const p = local(e)
     switch (g.type) {
@@ -314,7 +325,7 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
   }
 
   const renderHtml = (a: Annotation): ReactNode => {
-    if (a.kind !== 'text' && a.kind !== 'image' && a.kind !== 'note') return null
+    if (a.kind !== 'text' && a.kind !== 'image' && a.kind !== 'note' && a.kind !== 'stamp') return null
     const b = rectToV(boundsOf(a))
     const { cw, ch } = contentDims(b, a.rotate ?? pageRotate)
     const common: React.CSSProperties = {
@@ -337,6 +348,13 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
       return (
         <div key={a.id} className="img-annot" style={common} onPointerDown={(e) => startMove(e, a)}>
           <img src={a.dataUrl} alt={a.role} draggable={false} />
+        </div>
+      )
+    }
+    if (a.kind === 'stamp') {
+      return (
+        <div key={a.id} className="stamp-annot" style={common} onPointerDown={(e) => startMove(e, a)}>
+          <StampGraphic label={a.label} sublabel={a.sublabel} color={a.color} opacity={a.opacity} width={Math.max(1, cw / z)} height={Math.max(1, ch / z)} />
         </div>
       )
     }
@@ -443,6 +461,11 @@ export function Overlay({ doc, index, viewport }: { doc: Doc; index: number; vie
           const sh = (doc.rotation % 180 ? width : height) * z
           return <img className="ghost-image" src={pendingImage.dataUrl} alt="" style={{ left: hover.x - sw / 2, top: hover.y - sh / 2, width: sw, height: sh, transform: `rotate(${doc.rotation}deg)` }} />
         })()}
+        {tool === 'stamp' && pendingStamp && hover && (
+          <div className="ghost-stamp" style={{ left: hover.x, top: hover.y, width: pendingStamp.width * z, height: pendingStamp.height * z, transform: `translate(-50%, -50%) rotate(${doc.rotation}deg)` }}>
+            <StampGraphic label={pendingStamp.label} sublabel={pendingStamp.sublabel} color={pendingStamp.color} width={pendingStamp.width} height={pendingStamp.height} />
+          </div>
+        )}
       </div>
     </>
   )

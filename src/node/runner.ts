@@ -9,7 +9,7 @@ import { get, type Command, type Params } from '@core/commands/index'
 import { InputDoc, sha256Hex, type CommandContext } from '@core/commands/context'
 import { toYonderError, YonderError } from '@core/errors'
 import { validate } from '@core/schema'
-import { readSavedSignatures } from './appdata'
+import { readSavedSignatures, readSavedStamps } from './appdata'
 import { canonical, exists, identity, withWriteLock, writeAtomic } from './fs'
 import { loadPdfNode, NeedsPassword } from './pdfjs'
 
@@ -78,7 +78,8 @@ export function makeContext(opts: RunOptions, doc?: InputDoc): CommandContext {
     now: () => (deterministic ? Date.UTC(2026, 0, 1) : Date.now()),
     newId: () => (deterministic ? `a${String(++counter).padStart(4, '0')}` : crypto.randomUUID()),
     author: opts.author,
-    savedSignatures: readSavedSignatures
+    savedSignatures: readSavedSignatures,
+    savedStamps: readSavedStamps
   }
 }
 

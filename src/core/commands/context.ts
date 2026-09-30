@@ -8,6 +8,7 @@ import { hasSignatureFields } from '../forms'
 import * as ops from '../pageOps'
 import type { Schema } from '../schema'
 import { Session } from '../session'
+import type { SavedStampEntry } from '../stamps'
 import { ViewSpace } from '../space'
 import type { Annotation } from '../types'
 import { writeAnnotations, type WriteOptions } from '../writer'
@@ -28,6 +29,8 @@ export interface SavedSignatureRef {
   height: number
   createdAt: number
 }
+
+export type SavedStampRef = SavedStampEntry
 
 /**
  * One input document across a command or a batch: pdf-lib Session for
@@ -205,6 +208,8 @@ export interface CommandContext {
   author?: string
   /** The app's saved signatures/initials, when reachable (read-only headlessly). */
   savedSignatures?(): Promise<SavedSignatureRef[]>
+  /** The app's custom stamp library, when reachable (read-only headlessly). */
+  savedStamps?(): Promise<SavedStampRef[]>
 }
 
 export interface Outcome {

@@ -128,7 +128,9 @@ export function buildMenu(send: Send): Menu {
       submenu: [
         cmd('Add Signature…', 'sign:signature', 'CmdOrCtrl+Shift+G'),
         cmd('Add Initials…', 'sign:initials'),
-        cmd('Add Date', 'sign:date')
+        cmd('Add Date', 'sign:date'),
+        { type: 'separator' },
+        cmd('Stamp…', 'sign:stamp', 'CmdOrCtrl+Shift+M')
       ]
     },
     {

@@ -112,7 +112,8 @@ export async function launch(pdf, env = {}) {
   const electronBin = createRequire(resolve(root, 'package.json'))('electron')
   const proc = spawn(electronBin, [`--remote-debugging-port=${port}`, '.', ...(pdf ? [pdf] : [])], {
     cwd: root,
-    env: { ...process.env, YONDER_DEBUG: '1', ...env },
+    // An isolated profile: scenarios must never read or write the developer's real settings (saved signatures, stamps, recents).
+    env: { ...process.env, YONDER_DEBUG: '1', YONDER_USER_DATA: resolve(S, 'userdata'), ...env },
     stdio: ['ignore', 'pipe', 'pipe']
   })
   writeFileSync(pidFile, `${proc.pid}\n`, { flag: 'a' })

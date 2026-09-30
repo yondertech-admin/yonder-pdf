@@ -47,6 +47,11 @@ const api: YonderAPI = {
     add: (sig) => ipcRenderer.invoke('signatures:add', sig),
     remove: (id) => ipcRenderer.invoke('signatures:remove', id)
   },
+  stamps: {
+    list: () => ipcRenderer.invoke('stamps:list'),
+    add: (stamp) => ipcRenderer.invoke('stamps:add', stamp),
+    remove: (id) => ipcRenderer.invoke('stamps:remove', id)
+  },
   shell: {
     openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
     openPdfLink: (url) => ipcRenderer.invoke('shell:openPdfLink', url)

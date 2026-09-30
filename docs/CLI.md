@@ -90,7 +90,7 @@ Scope: both · needs `--in`: yes · writes: none
 
 ### `annotations.update`
 
-Change a session annotation: restyle (--color/--fill/--width/--opacity), edit text (--text/--font-size), move it (--move dx,dy) or set its box (--rect).
+Change a session annotation: restyle (--color/--fill/--width/--opacity), edit text (--text/--font-size; for a stamp, --text is its label), move it (--move dx,dy) or set its box (--rect).
 
 Scope: both · needs `--in`: yes · writes: document
 
@@ -104,7 +104,7 @@ Scope: both · needs `--in`: yes · writes: document
 | `--text` | string | New text (text box / note) |
 | `--font-size` | number | Font size in points |
 | `--move` | string | Offset "dx,dy" in points (view space) |
-| `--rect` | string | New box "x,y,width,height" in view space (text, image, rect, ellipse) |
+| `--rect` | string | New box "x,y,width,height" in view space (text, image, stamp, rect, ellipse) |
 
 ### `annotations.remove`
 
@@ -352,25 +352,34 @@ yonder-pdf annotate.image --in a.pdf --out b.pdf --image image.png --text "Signa
 
 ### `annotate.stamp`
 
-Place an image as a stamp.
+Place a stamp. Standard: --preset approved|not-approved|draft|final|completed|confidential|for-public-release|not-for-public-release|for-comment|void|preliminary-results|information-only|rejected|paid|received|reviewed|revised|sign-here|initial-here|witness. Custom text: --label "TEXT" (--color, --sublabel, --with-name uses --author, --with-date). Image: --image file. From the app library: --saved <id> (see stamps.list). Text stamps are real /Stamp annotations; image stamps are drawn into the page.
 
 Scope: both · needs `--in`: yes · writes: document
 
 | Parameter | Type | Description |
 |---|---|---|
-| `--image` | string | PNG or JPEG file |
-| `--saved` | string | Use a signature/initials saved in the app instead of --image (see signatures.list) |
+| `--preset` | string | Standard stamp id (see stamps.list) |
+| `--label` | string | Custom stamp text |
+| `--sublabel` | string | Second line (overrides --with-name/--with-date) |
+| `--with-name` | boolean | Add the --author name on the second line |
+| `--with-date` | boolean | Add today's date on the second line |
+| `--color` | string | Colour, hex (default: the preset colour, or #cf222e) |
+| `--opacity` | number | Opacity 0–1 (default 1) |
+| `--image` | string | PNG or JPEG file to use as an image stamp |
+| `--saved` | string | Id of a stamp saved in the app library |
 | `--page` | integer | Page number (1-based) |
-| `--rect` | string | Box "x,y,width,height" (image is stretched to it) |
-| `--at` | string | Bottom-left corner "x,y" (sized by --width, aspect kept) |
-| `--width` | number | Width in points when using --at or an anchor (default 200) |
+| `--rect` | string | Box "x,y,width,height" (the stamp is scaled to it) |
+| `--at` | string | Bottom-left corner "x,y" |
+| `--width` | number | Width in points (height follows the stamp proportions) |
 | `--text` | string | Anchor: place relative to this text (see find) |
 | `--occurrence` | integer | Which occurrence of the anchor text (1-based) |
 | `--align` | string | Where relative to the anchor text |
 | `--offset` | string | Extra offset "dx,dy" in points after alignment |
 
 ```
-yonder-pdf annotate.stamp --in a.pdf --out b.pdf --image stamp.png --text "Signature:" --align right
+yonder-pdf annotate.stamp --in a.pdf --out b.pdf --preset approved --page 1 --at 400,700
+yonder-pdf annotate.stamp --in a.pdf --out b.pdf --label "RECEIVED" --with-date --author "Ada Lovelace" --with-name --text "Invoice" --align right
+yonder-pdf annotate.stamp --in a.pdf --out b.pdf --image company-seal.png --page 1 --at 60,60 --width 120
 ```
 
 ### `annotate.sign`
@@ -445,6 +454,16 @@ yonder-pdf annotate.date --in a.pdf --out b.pdf --text "Date:" --align right
 List the signatures and initials saved in the Yonder PDF app (use with annotate.sign --saved <id>).
 
 Scope: both · needs `--in`: no · writes: none
+
+### `stamps.list`
+
+List the standard stamp presets and the custom stamps saved in the Yonder PDF app (use with annotate.stamp --preset <id> or --saved <id>).
+
+Scope: both · needs `--in`: no · writes: none
+
+```
+yonder-pdf stamps.list --json
+```
 
 ## pages
 

@@ -2,7 +2,7 @@
 // the built bundle (npm run build:cli) against test-fixtures/sample.pdf and
 // inspects outputs with pdf-lib / pdf.js instead of comparing bytes.
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
@@ -286,6 +286,77 @@ console.log('CLI: view-space coordinates on /Rotate 0/90/180/270 pages (rotated.
   const arrow = cli('annotate.arrow', '--in', ROT, '--out', join(T, 'ar270.pdf'), '--page', '4', '--from', '100,100', '--to', '300,100')
   const ab = await viewRect(join(T, 'ar270.pdf'), 3)
   check(arrow.code === 0 && ab.width > ab.height, 'a horizontal arrow on the /Rotate 270 page stays horizontal as displayed')
+}
+
+console.log('CLI: stamps (design §17)')
+{
+  const annotDict = async (file: string, pageIndex: number, n = 0): Promise<any> => {
+    const d = await load(file)
+    return d.context.lookup(d.getPage(pageIndex).node.Annots()!.get(n)) as any
+  }
+  const list = cli('stamps.list')
+  check(list.code === 0 && list.out.result.presets.length === 20 && list.out.result.presets.some((p: any) => p.id === 'approved'), 'stamps.list returns the 20 standard presets')
+  const ap = cli('annotate.stamp', '--in', FIX, '--out', join(T, 'stamp1.pdf'), '--preset', 'approved', '--page', '1', '--at', '380,700')
+  const d1 = await annotDict(join(T, 'stamp1.pdf'), 0)
+  check(ap.code === 0 && ap.out.result.kind === 'stamp' && d1.get(PDFName.of('Subtype')).toString() === '/Stamp' && d1.get(PDFName.of('Name')).toString() === '/Approved' && d1.get(PDFName.of('AP')) !== undefined, 'preset stamp is a /Stamp annotation named /Approved with an appearance')
+  check(ap.out.result.bounds.x === 380 && ap.out.result.bounds.y === 700 && ap.out.result.bounds.height === 34, 'preset stamp is placed at the requested view position with the default height')
+  const apStream = (await load(join(T, 'stamp1.pdf'))).context.lookup(d1.get(PDFName.of('AP')).get(PDFName.of('N'))) as any
+  const apText = Buffer.from(apStream.getContents()).toString('latin1')
+  const apFonts = apStream.dict.lookup(PDFName.of('Resources')).lookup(PDFName.of('Font'))
+  // The label is written as a hex string in Helvetica-Bold, inside a clip, with the preset's green as fill and stroke.
+  check(/\/HelvB [0-9.]+ Tf/.test(apText) && apText.includes('<' + Buffer.from('APPROVED', 'latin1').toString('hex').toUpperCase() + '> Tj') && apFonts.get(PDFName.of('HelvB')) !== undefined, 'appearance stream draws the label in the bold font that its resources declare')
+  check(/0\.102 0\.498 0\.216 rg/.test(apText) && /0\.102 0\.498 0\.216 RG/.test(apText) && / re W n /.test(apText), 'appearance uses the preset colour for fill and stroke and clips to its box')
+  const bbox = apStream.dict.lookup(PDFName.of('BBox')).asArray().map((n: any) => n.asNumber())
+  check(bbox[0] === 0 && bbox[1] === 0 && bbox[3] === 34, 'appearance BBox is the local stamp box')
+  const dyn = cli('annotate.stamp', '--in', FIX, '--out', join(T, 'stamp2.pdf'), '--preset', 'received', '--author', 'Ada Lovelace', '--page', '1', '--at', '60,60')
+  check(dyn.code === 0 && dyn.out.result.sublabel === 'Ada Lovelace · Jan 1, 2026' && dyn.out.result.bounds.height === 46, 'dynamic preset adds "name · date" and the taller box')
+  const custom = cli('annotate.stamp', '--in', ROT, '--out', join(T, 'stamp3.pdf'), '--label', 'CHECKED', '--color', '#8250df', '--with-date', '--text', 'Table', '--page', '4', '--align', 'right')
+  const d3 = await annotDict(join(T, 'stamp3.pdf'), 3)
+  check(custom.code === 0 && d3.get(PDFName.of('Name')).toString() === '/Custom' && d3.get(PDFName.of('Contents')).decodeText() === 'CHECKED\nJan 1, 2026', 'custom stamp anchored to text on a /Rotate 270 page: /Custom with label and date in /Contents')
+  const r3 = d3.get(PDFName.of('Rect')).asArray().map((n: any) => n.asNumber())
+  check(Math.abs(r3[3] - r3[1]) > Math.abs(r3[2] - r3[0]) && custom.out.result.bounds.width > custom.out.result.bounds.height, 'on the rotated page the stored /Rect is tall while the view box is wide')
+  const flat = cli('apply', '--in', FIX, '--out', join(T, 'stamp4.pdf'), '--ops', JSON.stringify([{ command: 'annotate.stamp', params: { preset: 'draft', page: 1, at: '100,400' } }, { command: 'annotations.update', params: { id: '$0.created', text: 'DRAFT 2', color: '#0969da' } }, { command: 'export.flatten', params: { forms: false } }]))
+  const flatDoc = await load(join(T, 'stamp4.pdf'))
+  const xobjects = flatDoc.getPage(0).node.Resources()?.lookup(PDFName.of('XObject')) as any
+  const flatNames = xobjects ? xobjects.keys().map((k: any) => k.toString()) : []
+  check(flat.code === 0 && !flatDoc.getPage(0).node.Annots()?.size() && flatNames.some((n: string) => n.startsWith('/YonderAnnot')), 'a stamp can be relabelled, recoloured and flattened: no annotation left, its appearance is a page XObject')
+  const relabel = cli('apply', '--in', FIX, '--out', join(T, 'stamp4b.pdf'), '--ops', JSON.stringify([{ command: 'annotate.stamp', params: { preset: 'approved', page: 1, at: '100,400' } }, { command: 'annotations.update', params: { id: '$0.created', text: 'REJECTED' } }]))
+  const d4b = await annotDict(join(T, 'stamp4b.pdf'), 0)
+  check(relabel.code === 0 && d4b.get(PDFName.of('Name')).toString() === '/Custom' && d4b.get(PDFName.of('Contents')).decodeText() === 'REJECTED', 'relabelling a preset stamp drops its standard /Name')
+  const emptyLabel = cli('apply', '--in', FIX, '--out', join(T, 'stamp4c.pdf'), '--ops', JSON.stringify([{ command: 'annotate.stamp', params: { preset: 'approved', page: 1, at: '100,400' } }, { command: 'annotations.update', params: { id: '$0.created', text: '   ' } }]))
+  check(emptyLabel.code === 2 && emptyLabel.err?.error.details.failedIndex === 1, 'an empty stamp label is rejected on update')
+  const tiny = cli('annotate.stamp', '--in', FIX, '--out', join(T, 'stamp4d.pdf'), '--preset', 'approved', '--page', '1', '--rect', '10,10,5,5')
+  check(tiny.code === 2 && /at least 24×12/.test(tiny.err?.error.message ?? ''), 'a stamp box below the minimum size is rejected')
+  const conflict = cli('annotate.stamp', '--in', FIX, '--out', join(T, 'stamp4e.pdf'), '--preset', 'approved', '--image', wide, '--page', '1', '--at', '10,10')
+  check(conflict.code === 2 && /only one of/.test(conflict.err?.error.message ?? ''), 'conflicting stamp sources are rejected')
+  const styled = cli('annotate.stamp', '--in', FIX, '--out', join(T, 'stamp4f.pdf'), '--image', wide, '--color', '#ff0000', '--page', '1', '--at', '10,10')
+  check(styled.code === 2 && /only apply to text stamps/.test(styled.err?.error.message ?? ''), 'text options on an image stamp are rejected')
+  const op = cli('annotate.stamp', '--in', FIX, '--out', join(T, 'stamp4g.pdf'), '--label', 'Tom & (Jerry) \\ Co', '--opacity', '0.5', '--page', '1', '--at', '60,300')
+  const d4g = await annotDict(join(T, 'stamp4g.pdf'), 0)
+  check(op.code === 0 && d4g.get(PDFName.of('CA')).asNumber() === 0.5 && d4g.get(PDFName.of('Contents')).decodeText() === 'Tom & (Jerry) \\ Co', 'opacity and a label with parentheses and a backslash survive')
+  // Library entries come from a user-editable file: malformed ones are ignored, valid ones usable.
+  const profile = join(T, 'profile')
+  mkdirSync(profile)
+  writeFileSync(join(profile, 'yonder-pdf.json'), JSON.stringify({ stamps: [
+    { id: 'ok-text', type: 'text', label: 'QA PASSED', color: '#1a7f37', withName: false, withDate: true, createdAt: 1 },
+    { id: 'bad-color', type: 'text', label: 'X', color: 'red', withName: false, withDate: false, createdAt: 1 },
+    { id: 'bad-image', type: 'image', dataUrl: 'data:image/png;base64,garbage!!', width: 0, height: 10, createdAt: 1 },
+    { id: 'zero-size', type: 'image', dataUrl: 'data:image/png;base64,AAAA', width: 0.1, height: 10, createdAt: 1 },
+    { type: 'text', label: 'no id', color: '#000000' },
+    'nonsense'
+  ] }))
+  const lib = spawnSync('node', [CLI, 'stamps.list', '--json'], { encoding: 'utf8', env: { ...process.env, YONDER_USER_DATA: profile } })
+  const libSaved = JSON.parse(lib.stdout).result.saved
+  check(lib.status === 0 && libSaved.length === 1 && libSaved[0].id === 'ok-text', 'malformed library entries are ignored')
+  const fromLib = spawnSync('node', [CLI, 'annotate.stamp', '--in', FIX, '--out', join(T, 'stamp4h.pdf'), '--saved', 'ok-text', '--page', '1', '--at', '60,500', '--json'], { encoding: 'utf8', env: { ...process.env, YONDER_USER_DATA: profile, YONDER_DETERMINISTIC: '1' } })
+  const fromLibOut = JSON.parse(fromLib.stdout)
+  check(fromLib.status === 0 && fromLibOut.result.label === 'QA PASSED' && fromLibOut.result.sublabel === 'Jan 1, 2026', 'a saved text stamp is placed with its saved options')
+  const bad = cli('annotate.stamp', '--in', FIX, '--out', join(T, 'stamp5.pdf'), '--preset', 'nope', '--page', '1', '--at', '10,10')
+  check(bad.code === 2 && /Presets: approved/.test(bad.err?.error.hint ?? '') && !existsSync(join(T, 'stamp5.pdf')), 'an unknown preset lists the valid ones')
+  const img = cli('annotate.stamp', '--in', FIX, '--out', join(T, 'stamp6.pdf'), '--image', wide, '--page', '1', '--at', '60,60', '--width', '120')
+  check(img.code === 0 && img.out.result.kind === 'image' && img.out.result.bounds.width === 120 && img.out.result.bounds.height === 60, 'an image stamp keeps its aspect at the requested width')
+  const none = cli('annotate.stamp', '--in', FIX, '--out', join(T, 'stamp7.pdf'), '--page', '1', '--at', '10,10')
+  check(none.code === 2 && none.err?.error.code === 'YP_USAGE', 'a stamp needs a preset, a label, an image or a saved id')
 }
 
 console.log('MCP: stdio handshake, tools/list, tools/call')

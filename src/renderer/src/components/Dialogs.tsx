@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useActiveDoc, useStore } from '@/store/app'
 import { Modal, ExternalLink } from './ui'
 import { SignatureDialog } from './SignatureDialog'
+import { StampDialog } from './StampDialog'
 import { parsePageRanges } from '@core/pageOps'
 
 export function Dialogs(): ReactNode {
@@ -12,6 +13,8 @@ export function Dialogs(): ReactNode {
   switch (dialog.type) {
     case 'signature':
       return <SignatureDialog kind={dialog.kind} onClose={close} />
+    case 'stamp':
+      return <StampDialog onClose={close} />
     case 'goToPage':
       return <GoToPage onClose={close} />
     case 'shortcuts':

@@ -56,6 +56,7 @@ export type Dialog =
   | { type: 'extract' }
   | { type: 'split' }
   | { type: 'note'; id: string }
+  | { type: 'stamp' }
   | { type: 'password'; reason: 'need' | 'wrong'; name: string; resolve: (pw: string | null) => void }
   | null
 
@@ -64,6 +65,16 @@ export interface PendingImage {
   width: number
   height: number
   role: 'signature' | 'initials' | 'stamp' | 'image'
+}
+
+/** A text stamp chosen in the Stamp dialog, waiting for a click on the page. Size in points. */
+export interface PendingStamp {
+  label: string
+  sublabel?: string
+  color: string
+  preset?: string
+  width: number
+  height: number
 }
 
 interface FindState {
@@ -81,6 +92,7 @@ interface State {
   tool: Tool
   style: ToolStyle
   pendingImage: PendingImage | null
+  pendingStamp: PendingStamp | null
   sidebarOpen: boolean
   sidebarTab: Settings['sidebarTab']
   theme: Settings['theme']
@@ -114,6 +126,7 @@ interface Actions {
   setTool(tool: Tool): void
   setStyle(patch: Partial<ToolStyle>): void
   setPendingImage(img: PendingImage | null): void
+  setPendingStamp(stamp: PendingStamp | null): void
 
   addAnnotation(a: Annotation): void
   updateAnnotation(id: string, patch: Partial<Annotation>, opts?: { history?: boolean }): void
@@ -307,6 +320,7 @@ export const useStore = create<Store>()((set, get) => {
     tool: 'select',
     style: { ...DEFAULT_STYLE },
     pendingImage: null,
+    pendingStamp: null,
     sidebarOpen: true,
     sidebarTab: 'thumbnails',
     theme: 'system',
@@ -640,8 +654,8 @@ export const useStore = create<Store>()((set, get) => {
     setTool(tool) {
       const s = get()
       const color = TOOL_DEFAULT_COLORS[tool]
-      const style = color && tool !== s.tool && !['select', 'hand', 'image'].includes(tool) ? { ...s.style, color } : s.style
-      set({ tool, style, pendingImage: tool === 'image' ? s.pendingImage : null })
+      const style = color && tool !== s.tool && !['select', 'hand', 'image', 'stamp'].includes(tool) ? { ...s.style, color } : s.style
+      set({ tool, style, pendingImage: tool === 'image' ? s.pendingImage : null, pendingStamp: tool === 'stamp' ? s.pendingStamp : null })
       const d = active()
       if (d && tool !== 'select' && d.selectedIds.length) patchDoc(d.id, { selectedIds: [] })
     },
@@ -664,7 +678,10 @@ export const useStore = create<Store>()((set, get) => {
       }
     },
     setPendingImage(img) {
-      set({ pendingImage: img, tool: img ? 'image' : 'select' })
+      set({ pendingImage: img, pendingStamp: null, tool: img ? 'image' : 'select' })
+    },
+    setPendingStamp(stamp) {
+      set({ pendingStamp: stamp, pendingImage: null, tool: stamp ? 'stamp' : 'select' })
     },
 
     addAnnotation(a) {

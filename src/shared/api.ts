@@ -43,6 +43,15 @@ export interface SavedSignature {
   createdAt: number
 }
 
+/** A custom stamp kept in the library (design §17). */
+export type SavedStamp =
+  | { id: string; type: 'text'; label: string; color: string; withName: boolean; withDate: boolean; createdAt: number }
+  | { id: string; type: 'image'; dataUrl: string; width: number; height: number; createdAt: number }
+
+export type NewSavedStamp =
+  | { type: 'text'; label: string; color: string; withName: boolean; withDate: boolean }
+  | { type: 'image'; dataUrl: string; width: number; height: number }
+
 export interface Settings {
   theme: 'system' | 'light' | 'dark'
   sidebarOpen: boolean
@@ -109,6 +118,7 @@ export type MenuCommand =
   | 'sign:signature'
   | 'sign:initials'
   | 'sign:date'
+  | 'sign:stamp'
   | 'page:rotateCw'
   | 'page:rotateCcw'
   | 'page:delete'
@@ -163,6 +173,11 @@ export interface YonderAPI {
   signatures: {
     list(): Promise<SavedSignature[]>
     add(sig: Omit<SavedSignature, 'id' | 'createdAt'>): Promise<SavedSignature>
+    remove(id: string): Promise<void>
+  }
+  stamps: {
+    list(): Promise<SavedStamp[]>
+    add(stamp: NewSavedStamp): Promise<SavedStamp>
     remove(id: string): Promise<void>
   }
   shell: {

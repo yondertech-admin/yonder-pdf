@@ -3,18 +3,22 @@ import { app } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { DEFAULT_SETTINGS, type RecentEntry, type SavedSignature, type Settings } from '@shared/api'
+import { DEFAULT_SETTINGS, type NewSavedStamp, type RecentEntry, type SavedSignature, type SavedStamp, type Settings } from '@shared/api'
 import { writeAtomic } from './documents'
+import { assertEmbeddable, imageInfo } from '@core/images'
+import { MAX_SAVED_STAMPS, MAX_STAMP_DATA_URL, normalizeStampLabel, validSavedStamp } from '@core/stamps'
 
 interface StoreShape {
   settings: Settings
   recent: Array<RecentEntry & { path: string }>
   signatures: SavedSignature[]
+  stamps: SavedStamp[]
 }
 
 const MAX_RECENT = 15
 const MAX_SIGNATURES = 20
 const MAX_SIGNATURE_DATA_URL = 600 * 1024
+
 
 let cache: StoreShape | null = null
 let writing: Promise<void> = Promise.resolve()
@@ -31,10 +35,11 @@ async function load(): Promise<StoreShape> {
     cache = {
       settings: { ...DEFAULT_SETTINGS, ...(parsed.settings ?? {}) },
       recent: Array.isArray(parsed.recent) ? parsed.recent : [],
-      signatures: Array.isArray(parsed.signatures) ? parsed.signatures : []
+      signatures: Array.isArray(parsed.signatures) ? parsed.signatures : [],
+      stamps: (Array.isArray(parsed.stamps) ? parsed.stamps.slice(0, MAX_SAVED_STAMPS) : []).map(validSavedStamp).filter((x): x is SavedStamp => x !== null)
     }
   } catch {
-    cache = { settings: { ...DEFAULT_SETTINGS }, recent: [], signatures: [] }
+    cache = { settings: { ...DEFAULT_SETTINGS }, recent: [], signatures: [], stamps: [] }
   }
   return cache
 }
@@ -113,5 +118,43 @@ export async function addSignature(sig: Omit<SavedSignature, 'id' | 'createdAt'>
 export async function removeSignature(id: string): Promise<void> {
   const s = await load()
   s.signatures = s.signatures.filter((x) => x.id !== id)
+  await persist()
+}
+
+export async function listStamps(): Promise<SavedStamp[]> {
+  return [...(await load()).stamps]
+}
+
+/** Validates everything that came from the renderer before it is persisted (REVIEW-07 #1). */
+export async function addStamp(input: NewSavedStamp): Promise<SavedStamp> {
+  if (!input || typeof input !== 'object') throw new Error('Invalid stamp')
+  let entry: SavedStamp
+  if (input.type === 'text') {
+    if (typeof input.label !== 'string') throw new Error('Invalid stamp text')
+    const label = normalizeStampLabel(input.label)
+    if (typeof input.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(input.color)) throw new Error('Invalid stamp colour')
+    entry = { id: randomUUID(), type: 'text', label, color: input.color.toLowerCase(), withName: input.withName === true, withDate: input.withDate === true, createdAt: Date.now() }
+  } else if (input.type === 'image') {
+    if (typeof input.dataUrl !== 'string') throw new Error('Invalid stamp image')
+    const m = input.dataUrl.match(/^data:image\/(png|jpeg);base64,([A-Za-z0-9+/=]+)$/)
+    if (!m) throw new Error('Stamp image must be a PNG or JPEG data URL')
+    if (input.dataUrl.length > MAX_STAMP_DATA_URL) throw new Error('Stamp image is too large')
+    // Dimensions come from the image itself, never from the caller; the bytes must decode.
+    const bytes = new Uint8Array(Buffer.from(m[2], 'base64'))
+    const info = imageInfo(bytes)
+    if (info.mime !== `image/${m[1]}`) throw new Error('Stamp image type does not match its data')
+    await assertEmbeddable(bytes, info)
+    entry = { id: randomUUID(), type: 'image', dataUrl: input.dataUrl, width: info.width, height: info.height, createdAt: Date.now() }
+  } else throw new Error('Invalid stamp type')
+  const s = await load()
+  s.stamps.unshift(entry)
+  s.stamps = s.stamps.slice(0, MAX_SAVED_STAMPS)
+  await persist()
+  return entry
+}
+
+export async function removeStamp(id: string): Promise<void> {
+  const s = await load()
+  s.stamps = s.stamps.filter((x) => x.id !== id)
   await persist()
 }

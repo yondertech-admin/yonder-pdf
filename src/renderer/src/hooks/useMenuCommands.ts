@@ -109,6 +109,8 @@ export function runCommand(cmd: MenuCommand): void {
       return void (doc && !doc.readOnly && s.setDialog({ type: 'signature', kind: 'signature' }))
     case 'sign:initials':
       return void (doc && !doc.readOnly && s.setDialog({ type: 'signature', kind: 'initials' }))
+    case 'sign:stamp':
+      return void (doc && !doc.readOnly && s.setDialog({ type: 'stamp' }))
     case 'sign:date': {
       if (!doc || doc.readOnly) return
       // Build the box in display space (top-right corner) and map it back through the page

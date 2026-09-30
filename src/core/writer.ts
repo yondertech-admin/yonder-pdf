@@ -18,7 +18,8 @@ import {
   type PDFImage,
   type PDFObject
 } from 'pdf-lib'
-import { NOTE_ICON_SIZE, arrowHeadPoints, boundsOf, hexToRgb, type Annotation, type ImageAnnotation, type Rect, type TextAnnotation, type NoteAnnotation } from './types'
+import { stampDisplayText, stampLayout, stampPdfName } from './stamps'
+import { NOTE_ICON_SIZE, arrowHeadPoints, boundsOf, hexToRgb, sanitizeForWinAnsi, type Annotation, type ImageAnnotation, type Rect, type StampAnnotation, type TextAnnotation, type NoteAnnotation } from './types'
 
 export interface WriteOptions {
   /** Draw annotations into page content instead of creating annotation objects. */
@@ -47,12 +48,13 @@ interface Ctx {
   doc: PDFDocument
   author: string
   helv: PDFFont | null
+  helvBold: PDFFont | null
   images: Map<string, PDFImage>
 }
 
 export async function writeAnnotations(bytes: Uint8Array, annotations: Annotation[], opts: WriteOptions = {}): Promise<Uint8Array> {
   const doc = await PDFDocument.load(bytes, { updateMetadata: false })
-  const ctx: Ctx = { doc, author: opts.author || 'Yonder PDF', helv: null, images: new Map() }
+  const ctx: Ctx = { doc, author: opts.author || 'Yonder PDF', helv: null, helvBold: null, images: new Map() }
   const pages = doc.getPages()
 
   for (const a of annotations) {
@@ -165,6 +167,8 @@ async function buildAppearance(ctx: Ctx, page: PDFPage, a: Annotation): Promise<
       return textAppearance(ctx, a, placementRotation(a, page))
     case 'note':
       return noteAppearance(ctx, a, placementRotation(a, page))
+    case 'stamp':
+      return stampAppearance(ctx, a, placementRotation(a, page))
     default:
       return null
   }
@@ -234,16 +238,6 @@ function rotatedMatrix(rect: Rect, rot: number): { matrix: number[]; w: number; 
   return { matrix: [cos, sin, -sin, cos, tx, ty], w, h }
 }
 
-function sanitizeForWinAnsi(s: string): string {
-  let out = ''
-  for (const ch of s) {
-    const code = ch.codePointAt(0) ?? 63
-    if (ch === '\n' || ch === '\t' || (code >= 32 && code <= 126) || (code >= 160 && code <= 255) || '€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ'.includes(ch)) out += ch
-    else out += '?'
-  }
-  return out
-}
-
 export function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
   const lines: string[] = []
   for (const para of text.replace(/\t/g, '    ').split('\n')) {
@@ -293,6 +287,45 @@ async function textAppearance(ctx: Ctx, a: TextAnnotation, rot: number): Promise
   }
   s += 'ET Q EMC'
   return form(ctx, s, rectOf(a.rect), { Font: { Helv: font.ref } }, matrix, [0, 0, w, h])
+}
+
+async function getHelvBold(ctx: Ctx): Promise<PDFFont> {
+  if (!ctx.helvBold) ctx.helvBold = await ctx.doc.embedFont(StandardFonts.HelveticaBold)
+  return ctx.helvBold
+}
+
+function roundedRectPath(x: number, y: number, w: number, h: number, r: number): string {
+  const k = 0.5523 * r
+  const x1 = x + w,
+    y1 = y + h
+  return (
+    `${f(x + r)} ${f(y)} m ${f(x1 - r)} ${f(y)} l ${f(x1 - r + k)} ${f(y)} ${f(x1)} ${f(y + r - k)} ${f(x1)} ${f(y + r)} c ` +
+    `${f(x1)} ${f(y1 - r)} l ${f(x1)} ${f(y1 - r + k)} ${f(x1 - r + k)} ${f(y1)} ${f(x1 - r)} ${f(y1)} c ` +
+    `${f(x + r)} ${f(y1)} l ${f(x + r - k)} ${f(y1)} ${f(x)} ${f(y1 - r + k)} ${f(x)} ${f(y1 - r)} c ` +
+    `${f(x)} ${f(y + r)} l ${f(x)} ${f(y + r - k)} ${f(x + r - k)} ${f(y)} ${f(x + r)} ${f(y)} c h`
+  )
+}
+
+/** Text stamp: rounded border, light tint, bold label and an optional second line (design §17). */
+async function stampAppearance(ctx: Ctx, a: StampAnnotation, rot: number): Promise<Appearance> {
+  const bold = await getHelvBold(ctx)
+  const regular = await getHelv(ctx)
+  const { matrix, w, h } = rotatedMatrix(a.rect, rot)
+  const label = stampDisplayText(a.label) || ' '
+  const sub = a.sublabel ? stampDisplayText(a.sublabel) : ''
+  const L = stampLayout(w, h, label, sub || undefined, (text, isBold) => (isBold ? bold : regular).widthOfTextAtSize(text, 1))
+  const opacity = Math.min(1, Math.max(0, a.opacity))
+  const stroke = ctx.doc.context.register(ctx.doc.context.obj({ Type: 'ExtGState', CA: opacity, ca: opacity }))
+  const tint = ctx.doc.context.register(ctx.doc.context.obj({ Type: 'ExtGState', CA: opacity, ca: 0.1 * opacity }))
+  const box = roundedRectPath(L.inset, L.inset, Math.max(0, w - 2 * L.inset), Math.max(0, h - 2 * L.inset), L.radius)
+  // The text never leaves the box, whatever the size (REVIEW-07 #6).
+  const clip = `0 0 ${f(w)} ${f(h)} re W n `
+  let s = `q /GST gs ${rgbOps(a.color, 'rg')} ${box} f Q `
+  s += `q ${clip}/GSS gs ${rgbOps(a.color, 'RG')} ${f(L.border)} w ${box} S `
+  s += `BT ${rgbOps(a.color, 'rg')} /HelvB ${f(L.label.size)} Tf 1 0 0 1 ${f(L.label.x)} ${f(L.label.y)} Tm ${bold.encodeText(label).toString()} Tj ET `
+  if (sub && L.sublabel) s += `BT ${rgbOps(a.color, 'rg')} /Helv ${f(L.sublabel.size)} Tf 1 0 0 1 ${f(L.sublabel.x)} ${f(L.sublabel.y)} Tm ${regular.encodeText(sub).toString()} Tj ET `
+  s += 'Q'
+  return form(ctx, s, rectOf(a.rect), { Font: { HelvB: bold.ref, Helv: regular.ref }, ExtGState: { GSS: stroke, GST: tint } }, matrix, [0, 0, w, h])
 }
 
 function noteAppearance(ctx: Ctx, a: NoteAnnotation, rot: number): Appearance {
@@ -374,6 +407,15 @@ function addAnnotation(ctx: Ctx, page: PDFPage, a: Annotation, ap: Appearance): 
       })
       break
     }
+    case 'stamp':
+      Object.assign(base, {
+        Subtype: 'Stamp',
+        Name: stampPdfName(a.preset),
+        Contents: PDFHexString.fromText(a.sublabel ? `${a.label}\n${a.sublabel}` : a.label),
+        C: color(a.color),
+        CA: a.opacity
+      })
+      break
     case 'note': {
       const annot = doc.context.obj({
         ...base,

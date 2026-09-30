@@ -20,7 +20,7 @@ export function PropertiesBar(): ReactNode {
   const hasColor = !['select', 'hand', 'image', 'multiple'].includes(kind) || selected.some((a) => 'color' in a)
   const hasStroke = ['ink', 'rect', 'ellipse', 'line', 'arrow'].some(showFor)
   const hasFill = ['rect', 'ellipse'].some(showFor)
-  const hasOpacity = ['highlight', 'underline', 'strikeout', 'ink', 'rect', 'ellipse', 'line', 'arrow'].some(showFor)
+  const hasOpacity = ['highlight', 'underline', 'strikeout', 'ink', 'rect', 'ellipse', 'line', 'arrow', 'stamp'].some(showFor)
   const hasFont = showFor('text')
 
   if (!doc || ((tool === 'select' || tool === 'hand') && !selected.length)) return null
@@ -28,7 +28,15 @@ export function PropertiesBar(): ReactNode {
     return (
       <aside className="props">
         <h4>Place</h4>
-        <div className="hint">Click on the page to place your signature. Drag the corner handle afterwards to resize.</div>
+        <div className="hint">Click on the page to place it. Drag the corner handle afterwards to resize.</div>
+      </aside>
+    )
+  }
+  if (tool === 'stamp' && !selected.length) {
+    return (
+      <aside className="props">
+        <h4>Place stamp</h4>
+        <div className="hint">Click on the page to place the stamp. Hold Shift while clicking to place several. Select a stamp afterwards to move, resize or recolour it. Esc cancels.</div>
       </aside>
     )
   }
